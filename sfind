@@ -1,0 +1,590 @@
+#!/usr/bin/perl
+#
+# sfind - search for files in an SFTP accessible directory hierarchy
+#
+# $Id$
+#
+
+use strict;
+use warnings;
+use Net::SSH2;
+use Getopt::Long  qw{ :config require_order };
+use POSIX qw{ S_ISBLK S_ISCHR S_ISDIR S_ISFIFO S_ISREG 
+              strftime 
+            };
+
+my ($REMOTE_USER, $REMOTE_HOST, $KEY_FILE, $PUB_KEY, $SEC_KEY);
+my $USE_REALPATH;
+
+GetOptions(
+        "user|login=s" => \$REMOTE_USER,
+        "key=s" => \$KEY_FILE,
+        "pub-key=s" => \$PUB_KEY,
+        "sec-key=s" => \$SEC_KEY,
+        "real-path" => \$USE_REALPATH,
+    )
+    or die usage();
+if (($SEC_KEY and not $PUB_KEY) or ($PUB_KEY and not $SEC_KEY)) {
+    die "$0: one of --sec-key and --pub-key is missing\n";
+}
+if ($SEC_KEY and $KEY_FILE) {
+    die "$0: cannot give --sec-key and --key at the same time\n";
+}
+if ($KEY_FILE) {
+    $SEC_KEY = $KEY_FILE;
+    $PUB_KEY = "$KEY_FILE.pub";
+}
+if (!$REMOTE_USER) {
+    $REMOTE_USER = $ENV{USER};
+}
+
+my $user_at_host = shift @ARGV
+  or die "$0: Usage: OPTIONS [user@]host:[DIR] [CRITERIA]\n";
+
+my ($user, $host, $base_dir);
+if ($user_at_host =~ s/^(([^@]+)\@)?([\w\d\.\-]+)://) {
+    if (defined $2 and $2 ne "") {
+        $REMOTE_USER = $2;
+    }
+    $REMOTE_HOST = $3;
+    $base_dir = $user_at_host;
+    if ($base_dir eq "") {
+        $base_dir = ".";
+    }
+}
+
+my @criteria = ();
+my $eol     = "\n";
+my $printf  = '%p';
+my $ls_mode = 0;
+my $max_depth = undef;
+my $depth_first = 0;
+
+my %options = (
+        '-ctime' => {
+            option => sub { die "$0: unsupported option -ctime\n"; }
+        },
+        '-cmin' => {
+            option => sub { die "$0: unsupported option -cmin\n"; }
+        },
+        '-user' => {
+            option => sub { die "$0: unsupported option -user, use -uid\n"; }
+        },
+        '-group' => {
+            option => sub { die "$0: unsupported option -group, use -gid\n"; }
+        },
+
+        '-type' => {
+            option => sub {
+                my $v = shift @ARGV;
+                if (!defined $v or $v =~ /^-/) {
+                    die "$0: option -type requires an argument\n";
+                }
+                my $test;
+                if    ($v eq 'f') { $test = \&S_ISREG; }
+                elsif ($v eq 'd') { $test = \&S_ISDIR; }
+                elsif ($v eq 'b') { $test = \&S_ISBLK; }
+                elsif ($v eq 'c') { $test = \&S_ISCHR; }
+                elsif ($v eq 'p') { $test = \&S_ISFIFO; }
+                else {
+                    die "$0: unknown argument '$v' for -type\n";
+                }
+                push @criteria, ['-type', $test];
+            },
+            filter => sub {
+                my ($entry, $test, $args) = @_;
+                $test->($entry->{mode});
+            },
+        },
+
+        '-name' => {
+            option => sub {
+                my $v = shift @ARGV;
+                if (!defined $v or $v =~ /^-/) {
+                    die "$0: option -name requires an argument\n";
+                }
+                $v = qr/$v/ or die "$0: ivalid regex for -name\n";
+                push @criteria, ['-name', $v];
+            },
+            filter => sub {
+                my ($entry, $test, $args) = @_;
+                $entry->{name} =~ $test;
+            },
+        },
+
+        '-iname' => {
+            option => sub {
+                my $v = shift @ARGV;
+                if (!defined $v or $v =~ /^-/) {
+                    die "$0: option -iname requires an argument\n";
+                }
+                $v = qr/$v/i or die "$0: ivalid regex for -iname\n";
+                push @criteria, ['-iname', $v];
+            },
+            filter => sub {
+                my ($entry, $test, $args) = @_;
+                $entry->{name} =~ $test;
+            },
+        },
+
+        '-uid' => {
+            option => sub {
+                my $v = shift @ARGV;
+                if (!defined $v or $v =~ /^-/) {
+                    die "$0: option -uid requires an argument\n";
+                }
+                push @criteria, ['-uid', $v];
+            },
+            filter => sub {
+                my ($entry, $test, $args) = @_;
+                return ($entry->{uid} == $test);
+            },
+        },
+
+        '-gid' => {
+            option => sub {
+                my $v = shift @ARGV;
+                if (!defined $v or $v =~ /^-/) {
+                    die "$0: option -did requires an argument\n";
+                }
+                push @criteria, ['-gid', $v];
+            },
+            filter => sub {
+                my ($entry, $test, $args) = @_;
+                return ($entry->{gid} == $test);
+            },
+        },
+
+        '-print' => {
+            option => sub {
+                $eol     = "\n";
+                $printf  = '%p';
+                $ls_mode = 0;
+            },
+        },
+
+        '-print0' => {
+            option => sub {
+                $eol     = "\0";
+                $printf  = '%p';
+                $ls_mode = 0;
+            },
+        },
+
+        '-printf' => {
+            option => sub {
+                $eol     = "";
+                $printf  = shift @ARGV;
+                die "$0: option -printf requires an argument\n"
+                    unless defined $printf;
+                $ls_mode = 0;
+            },
+        },
+
+        '-ls' => {
+            option => sub {
+                $eol     = "\n";
+                $printf  = '%M %u %g %s %TI %p%l';
+                $ls_mode = 1;
+            },
+        },
+
+        '-empty' => {
+            option => sub {
+                push @criteria, ['-empty', undef];
+            },
+            filter => sub {
+                my ($entry, $test, $args) = @_;
+                !$entry->{size};
+            },
+        },
+
+        '-maxdepth' => {
+            option => sub {
+                my $v = shift @ARGV;
+                if (!defined $v or $v =~ /^-/) {
+                    die "$0: option -maxdepth requires an argument\n";
+                }
+                $max_depth = $v;
+            },
+        },
+
+        '-depth' => {
+            option => sub { $depth_first = 1; },
+        },
+
+        '-mtime' => {
+            option => sub {
+                my $v = shift @ARGV;
+                die "$0: option -mtime requires an argument\n"
+                    unless defined $v;
+                $v =~ s/(\d+)$//
+                    or die "$0: argument to -mtime does not end with digits\n";
+                my $days = $1;
+                my $ref_time = time;
+                $ref_time = $ref_time - ($ref_time % 86400) - $days * 86400;
+                if ($v eq '-') {
+                    push @criteria, ['-mtime', $ref_time, '-'];
+                }
+                elsif ($v eq '+') {
+                    push @criteria, ['-mtime', $ref_time, '+'];
+                }
+                else {
+                    push @criteria, ['-mtime', $ref_time, '='];
+                }
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp) = @_;
+                my $m = $entry->{mtime} - ($entry->{mtime} % 86400);
+
+                if ($cmp eq '-') {
+                    return ($m > $ref);
+                }
+                elsif ($cmp eq '+') {
+                    return ($m < $ref);
+                }
+                else {
+                    return ($m == $ref);
+                }
+            },
+        },
+
+        '-atime' => {
+            option => sub {
+                my $v = shift @ARGV;
+                die "$0: option -atime requires an argument\n"
+                    unless defined $v;
+
+                $v =~ s/(\d+)$//
+                    or die "$0: argument to -atime does not end with digits\n";
+                my $days = $1;
+
+                my $ref_time = time;
+                $ref_time = $ref_time - ($ref_time % 86400) - $days * 86400;
+
+                if ($v eq '-') {
+                    push @criteria, ['-atime', $ref_time, '-'];
+                }
+                elsif ($v eq '+') {
+                    push @criteria, ['-atime', $ref_time, '+'];
+                }
+                else {
+                    push @criteria, ['-atime', $ref_time, '='];
+                }
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp) = @_;
+                my $m = $entry->{atime} - ($entry->{atime} % 86400);
+
+                if ($cmp eq '-') {
+                    return ($m > $ref);
+                }
+                elsif ($cmp eq '+') {
+                    return ($m < $ref);
+                }
+                else {
+                    return ($m == $ref);
+                }
+            },
+        },
+
+        '-mmin' => {
+            option => sub {
+                my $v = shift @ARGV;
+                die "$0: option -mmin requires an argument\n"
+                    unless defined $v;
+                $v =~ s/(\d+)$//
+                    or die "$0: argument to -mmin does not end with digits\n";
+                my $minutes = $1;
+                my $ref_time = time;
+                $ref_time = $ref_time - ($ref_time % 60) - $minutes * 60;
+                if ($v eq '-') {
+                    push @criteria, ['-mmin', $ref_time, '-'];
+                }
+                elsif ($v eq '+') {
+                    push @criteria, ['-mmin', $ref_time, '+'];
+                }
+                else {
+                    push @criteria, ['-mmin', $ref_time, '='];
+                }
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp) = @_;
+                my $m = $entry->{mtime} - ($entry->{mtime} % 60);
+
+                if ($cmp eq '-') {
+                    return ($m > $ref);
+                }
+                elsif ($cmp eq '+') {
+                    return ($m < $ref);
+                }
+                else {
+                    return ($m == $ref);
+                }
+            },
+        },
+
+        '-amin' => {
+            option => sub {
+                my $v = shift @ARGV;
+                die "$0: option -amin requires an argument\n"
+                    unless defined $v;
+                $v =~ s/(\d+)$//
+                    or die "$0: argument to -amin does not end with digits\n";
+                my $minutes = $1;
+                my $ref_time = time;
+                $ref_time = $ref_time - ($ref_time % 60) - $minutes * 60;
+                if ($v eq '-') {
+                    push @criteria, ['-amin', $ref_time, '-'];
+                }
+                elsif ($v eq '+') {
+                    push @criteria, ['-amin', $ref_time, '+'];
+                }
+                else {
+                    push @criteria, ['-amin', $ref_time, '='];
+                }
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp) = @_;
+                my $m = $entry->{atime} - ($entry->{atime} % 60);
+
+                if ($cmp eq '-') {
+                    return ($m > $ref);
+                }
+                elsif ($cmp eq '+') {
+                    return ($m < $ref);
+                }
+                else {
+                    return ($m == $ref);
+                }
+            },
+        },
+
+        '-size' => {
+            option => sub {
+                my $v = shift @ARGV;
+                die "$0: option -size requires an argument\n"
+                    unless defined $v;
+                $v =~ s/(\d+)$//
+                    or die "$0: argument to -size does not end with digits\n";
+                my $size = $1;
+                if ($v eq '-') {
+                    push @criteria, ['-size', $size, '-'];
+                }
+                elsif ($v eq '+') {
+                    push @criteria, ['-size', $size, '+'];
+                }
+                else {
+                    push @criteria, ['-size', $size, '='];
+                }
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp) = @_;
+                if ($cmp eq '-') {
+                    return ($entry->{size} < $ref);
+                }
+                elsif ($cmp eq '+') {
+                    return ($entry->{size} > $ref);
+                }
+                else {
+                    return ($entry->{size} == $ref);
+                }
+            },
+        },
+
+    );
+
+while (@ARGV) {
+    my $opt = shift @ARGV;
+    die "$0: unknown argument $opt\n"
+        unless exists $options{$opt};
+
+    $options{$opt}->{option}();
+}
+
+my $ssh = Net::SSH2->new();
+$ssh->connect($REMOTE_HOST)
+  or die "$0: failed to connect to $REMOTE_HOST $!\n";
+unless ($ssh->auth_publickey($REMOTE_USER, $PUB_KEY, $SEC_KEY)) {
+    die "$0: auth failed...\n";
+}
+
+my $sftp = $ssh->sftp()
+    or die "$0: sftp() failed: ", $ssh->error,"\n";
+if ($USE_REALPATH) {
+    my $real_base = $sftp->realpath($base_dir);
+    die "$0: failed to get realpath of remote dir $base_dir\n"
+        unless defined $real_base;
+    $base_dir = $real_base;
+}
+
+find($base_dir, 0);
+
+sub find {
+    my $name  = shift;
+    my $depth = shift;
+    my $dir   = $sftp->opendir($name);
+    my @sub_dirs;
+    while (my $entry = $dir->read()) {
+        if (S_ISDIR($entry->{mode})) {
+            next if $entry->{name} =~ /^\.\.?$/;
+
+            if (!defined $max_depth or $depth < $max_depth) {
+                if ($depth_first) {
+                    find("$name/".$entry->{name}, $depth + 1);
+                }
+                else {
+                    push @sub_dirs, "$name/".$entry->{name};
+                }
+            }
+        }
+
+        $entry->{path}  = $name;
+        $entry->{depth} = $depth;
+        if (filter($entry)) {
+            print_entry($entry);
+        }
+    }
+
+    foreach (@sub_dirs) {
+        find($_, $depth + 1);
+    }
+}
+
+sub print_entry {
+    my $entry = shift;
+    my @chars = split //, $printf;
+    my $out   = "";
+    while (@chars) {
+        my $chr = shift @chars;
+        if ($chr eq '%') {
+            $chr = shift @chars;
+            if ($chr eq '%') {
+                $out .= '%';
+            }
+            elsif ($chr eq 'p') {
+                $out .= $entry->{path}."/".$entry->{name};
+            }
+            elsif ($chr eq 'l') {
+                my $path = $entry->{path}."/".$entry->{name};
+                my $target = $sftp->readlink($path);
+                if (defined $target) {
+                    $out .= " -> $target";
+                }
+            }
+            elsif ($chr eq 'f') {
+                $out .= $entry->{name};
+            }
+            elsif ($chr eq 'h') {
+                $out .= $entry->{path};
+            }
+            elsif ($chr eq 's') {
+                $out .= $entry->{size};
+            }
+            elsif ($chr eq 'm') {
+                $out .= sprintf "%o", $entry->{mode};
+            }
+            elsif ($chr eq 'M') {
+                $out .= get_ls_mode($entry);
+            }
+            elsif ($chr eq 'a') {
+                $out .= $entry->{atime};
+            }
+            elsif ($chr eq 'u' or $chr eq 'U') {
+                $out .= $entry->{uid};
+            }
+            elsif ($chr eq 'g' or $chr eq 'G') {
+                $out .= $entry->{gid};
+            }
+            elsif ($chr eq 't') {
+                $out .= $entry->{mtime};
+            }
+            elsif ($chr eq 'd') {
+                $out .= $entry->{depth};
+            }
+            elsif ($chr eq 'T') {
+                $chr = shift @chars;
+                if ($chr eq '@') {
+                    $out .= $entry->{mtime};
+                }
+                elsif ($chr eq 'I') {
+                    $out .= strftime('%Y-%m-%d %H:%M:%S', localtime($entry->{mtime}));
+                }
+            }
+        }
+        elsif ($chr eq '\\') {
+            $chr = shift @chars;
+            eval "\$chr = \"\\$chr\";";
+            $out .=  $chr;
+        }
+        else {
+            $out .= $chr;
+        }
+    }
+    
+    print $out, $eol;
+}
+
+sub get_ls_mode {
+    my $entry = shift;
+    my $str   = '';
+
+    if    (S_ISDIR($entry->{mode}))  { $str .= "d"; }
+    elsif (S_ISREG($entry->{mode}))  { $str .= "-"; }
+    elsif (S_ISFIFO($entry->{mode})) { $str .= "p"; }
+    elsif (S_ISCHR($entry->{mode}))  { $str .= "c"; }
+    elsif (S_ISBLK($entry->{mode}))  { $str .= "b"; }
+    elsif ($entry->{mode} & 0140000)  { 
+        my $fname = $entry->{path}."/".$entry->{name};
+        my $target = $sftp->readlink($fname);
+        if (!defined $target) {
+            $str .= "s";
+        }
+        else {
+            $str .= "l";
+        }
+    }
+    else  {
+        warn "$0: unknown file type: ",
+            sprintf "FILE=%s/%s MODE=%o %x\n",
+                $entry->{path}, $entry->{name}, 
+                    ($entry->{mode} &~ 07777), 
+                    ($entry->{mode} &~ 07777);
+        $str .= "U";
+    }
+
+    my $mode = $entry->{mode} & 07777;
+    $str .= ($mode & 0400) ? "r" : "-";
+    $str .= ($mode & 0200) ? "w" : "-";
+    if    ($mode & 04000 and $mode & 0100) { $str .= "s"; }
+    elsif ($mode & 0100)                   { $str .= "x"; }
+    elsif ($mode & 04000)                  { $str .= "S"; }
+    else                                   { $str .= "-"; }
+
+    $str .= ($mode & 040) ? "r" : "-";
+    $str .= ($mode & 020) ? "w" : "-";
+    if    ($mode & 02000 and $mode & 010) { $str .= "s"; }
+    elsif ($mode & 010)                   { $str .= "x"; }
+    elsif ($mode & 02000)                 { $str .= "S"; }
+    else                                  { $str .= "-"; }
+
+    $str .= ($mode & 04) ? "r" : "-";
+    $str .= ($mode & 02) ? "w" : "-";
+    if    ($mode & 01000 and $mode & 01) { $str .= "t"; }
+    elsif ($mode & 01)                   { $str .= "x"; }
+    elsif ($mode & 01000)                { $str .= "T"; }
+    else                                 { $str .= "-"; }
+
+    return $str;
+}
+
+sub filter {
+    my $entry = shift;
+    foreach my $crit (@criteria) {
+        my ($opt, $test, $args) = @$crit;
+        $options{$opt}->{filter}->($entry, $test, $args) or return 0;
+    }
+    return 1;
+}
+
+# vim: ts=4 sw=4 expandtab syn=perl
