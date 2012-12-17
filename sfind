@@ -5,6 +5,212 @@
 # $Id$
 #
 
+=head1 NAME
+
+sfind - search for files in an SFTP accessible directory hierarchy
+
+=head1 SYNOPSIS
+
+ sfind --key ~/.ssh/id_dsa user@remote:/path/to -type f -name '\.pl$' \
+    -mtime +5 -print0
+
+=head1 DESCRIPTION
+
+B<sfind> lets you search for files in a remote location which is accessible
+via L<ssh(1)> / L<sftp(1)>. It behaves similar to L<find(1)>, though some 
+restrictions are given, because not all information is available via sftp's
+L<stat(2)> method.
+
+=head1 OPTIONS
+
+The options are divided into two parts, the first one configures where to 
+connect and how to authenticate at the remote system. The second part is
+about selecting files and print them.
+
+=head2 SSH Options
+
+=over 4
+
+=item --key FILE
+
+Uses FILE.pub as public key file and FILE as private key file to authenticate
+at the remote system.
+
+=item --pub-key FILE
+
+Uses FILE as the public key for authentication. Note that this option requires
+also a C<--sec-key> option and C<--key> must not be present.
+
+=item --sec-key FILE
+
+Uses FILE as the secret key for authentication. Note that this option requires
+also a C<--pub-key> option and C<--key> must not be present.
+
+=item --user NAME / --login NAME
+
+The authenication will be tried as user NAME at the remote system. Note that
+a user part in the remote system name will override this setting. If neither
+--user / --login is given nor the user part exists the NAME will be set to 
+whatever is in the environment variable C<USER>
+
+=item --real-path
+
+Files will be printed with full path instead of relative, uses L<sftp(1)>s
+C<realpath> call.
+
+=back
+
+=head2 Filter Options
+
+=over 4
+
+=item -type TYPE
+
+Selects files of the given type. Valid types are
+
+=over 8
+
+=item f 
+
+regular B<f>iles
+
+=item d 
+
+B<d>irectories
+
+=item p 
+
+FIFOs (named B<p>ipes)
+
+=item b
+
+B<b>lock devices
+
+=item c
+
+B<c>haracter devices
+
+=item l
+
+symbolic B<l>inks
+
+=item s
+
+B<s>ockets
+
+=back
+
+=item -name REGEX
+
+Only files matching the perl regex REGEX
+
+=item -iname REGEX
+
+Same as C<-name>, case insensitive.
+
+=item -regex REGEX
+
+Like C<-name>, but matches on the full C<path/file> instead of just the
+file name.
+NOTE: the path is the one given on the command line UNLESS the C<--real-path>
+option is used
+
+=item -uid NUMBER
+
+Files' user id is equal to NUMBER
+
+=item -gid NUMBER
+
+Files' group id is equal to NUMBER
+
+=item -empty 
+
+Shortcut for C<-size 0>, note that it does not match empty directories
+
+=item -mtime TIME
+
+If time starts with a C<+>, files modification time older than TIME days.
+A leading C<-> selects files newer than TIME days. Without any prefix: files
+which are TIME days old.
+
+NOTE: Currently this option behaves like C<-daystart> was given to L<find(1)>.
+
+=item -atime TIME
+
+Like C<-mtime>, only for atime (access time).
+
+=item -mmin TIME
+
+Like C<-mtime>, but in minutes
+
+=item -amin TIME
+
+Like C<-atime>, but in minutes
+
+=item -size SIZE
+
+If SIZE starts with a C<+>, files with a size greater than SIZE are selected.
+A leading C<-> selects files smaller than SIZE. Without any prefix: files
+which are exactly SIZE bytes.
+
+=back
+
+=head2 Tree Traversal Options
+
+=over 4
+
+=item -maxdepth DEPTH
+
+Only descend DEPTH levels deep.
+
+=item -depth
+
+Does a depth first search, i.e. directories are descended as soon as one is 
+found. Default is to process contents first, then descend.
+
+=back
+
+=head2 Output Options
+
+=over 4
+
+=item -print
+
+Prints the name of all matching files separated by a newline C<\n>, this 
+is the default if no other output option is given.
+
+=item -print0
+
+Prints the names of all matching files spearated by a C<\0>, useful for files
+which may contain spaces or newlines. Use with L<xargs(1)>'s C<-0> option.
+
+=item -printf FORMAT
+
+Prints the wanted information in the given FORMAT
+
+=item -ls
+
+A L<ls(1)> like output, due to missing stat info not compatible to L<find(1)>'s
+C<-ls> option. This is a shortcut for C<-printf '%M %u %g %s %TI %p%l\n'>
+
+=back
+
+=head2 Unsupported options from find
+
+=over 4 
+
+=item -ctime
+
+=item -cmin
+
+=item -user
+
+=item -group
+
+=back
+
+=cut
+
 use strict;
 use warnings;
 use Net::SSH2;
@@ -13,40 +219,41 @@ use POSIX qw{ S_ISBLK S_ISCHR S_ISDIR S_ISFIFO S_ISREG
               strftime 
             };
 
-my ($REMOTE_USER, $REMOTE_HOST, $KEY_FILE, $PUB_KEY, $SEC_KEY);
-my $USE_REALPATH;
+my ($remote_user, $remote_host, $key_file, $pub_key, $sec_key);
+my $use_realpath;
+$0 =~ s#.*/##;
 
 GetOptions(
-        "user|login=s" => \$REMOTE_USER,
-        "key=s" => \$KEY_FILE,
-        "pub-key=s" => \$PUB_KEY,
-        "sec-key=s" => \$SEC_KEY,
-        "real-path" => \$USE_REALPATH,
+        "user|login=s" => \$remote_user,
+        "key=s" => \$key_file,
+        "pub-key=s" => \$pub_key,
+        "sec-key=s" => \$sec_key,
+        "real-path" => \$use_realpath,
     )
     or die usage();
-if (($SEC_KEY and not $PUB_KEY) or ($PUB_KEY and not $SEC_KEY)) {
+if (($sec_key and not $pub_key) or ($pub_key and not $sec_key)) {
     die "$0: one of --sec-key and --pub-key is missing\n";
 }
-if ($SEC_KEY and $KEY_FILE) {
+if ($sec_key and $key_file) {
     die "$0: cannot give --sec-key and --key at the same time\n";
 }
-if ($KEY_FILE) {
-    $SEC_KEY = $KEY_FILE;
-    $PUB_KEY = "$KEY_FILE.pub";
+if ($key_file) {
+    $sec_key = $key_file;
+    $pub_key = "$key_file.pub";
 }
-if (!$REMOTE_USER) {
-    $REMOTE_USER = $ENV{USER};
+if (!$remote_user) {
+    $remote_user = $ENV{USER};
 }
 
 my $user_at_host = shift @ARGV
-  or die "$0: Usage: OPTIONS [user@]host:[DIR] [CRITERIA]\n";
+  or die usage();
 
 my ($user, $host, $base_dir);
 if ($user_at_host =~ s/^(([^@]+)\@)?([\w\d\.\-]+)://) {
     if (defined $2 and $2 ne "") {
-        $REMOTE_USER = $2;
+        $remote_user = $2;
     }
-    $REMOTE_HOST = $3;
+    $remote_host = $3;
     $base_dir = $user_at_host;
     if ($base_dir eq "") {
         $base_dir = ".";
@@ -59,19 +266,14 @@ my $printf  = '%p';
 my $ls_mode = 0;
 my $max_depth = undef;
 my $depth_first = 0;
+my $negate = 0;
 
 my %options = (
-        '-ctime' => {
-            option => sub { die "$0: unsupported option -ctime\n"; }
-        },
-        '-cmin' => {
-            option => sub { die "$0: unsupported option -cmin\n"; }
-        },
-        '-user' => {
-            option => sub { die "$0: unsupported option -user, use -uid\n"; }
-        },
-        '-group' => {
-            option => sub { die "$0: unsupported option -group, use -gid\n"; }
+
+        '-not' => {
+            option => sub {
+                $negate = 1;
+            },
         },
 
         '-type' => {
@@ -83,17 +285,20 @@ my %options = (
                 my $test;
                 if    ($v eq 'f') { $test = \&S_ISREG; }
                 elsif ($v eq 'd') { $test = \&S_ISDIR; }
-                elsif ($v eq 'b') { $test = \&S_ISBLK; }
+                elsif ($v eq 'b') { $test = \&S_ISULK; }
                 elsif ($v eq 'c') { $test = \&S_ISCHR; }
                 elsif ($v eq 'p') { $test = \&S_ISFIFO; }
                 else {
                     die "$0: unknown argument '$v' for -type\n";
                 }
-                push @criteria, ['-type', $test];
+                push @criteria, ['-type', $test, undef, $negate];
+                $negate = 0;
             },
             filter => sub {
-                my ($entry, $test, $args) = @_;
-                $test->($entry->{mode});
+                my ($entry, $test, $args, $negate) = @_;
+                my $ret = $test->($entry->{mode});
+                $ret = ($negate ? !$ret : $ret);
+                return $ret;
             },
         },
 
@@ -104,11 +309,13 @@ my %options = (
                     die "$0: option -name requires an argument\n";
                 }
                 $v = qr/$v/ or die "$0: ivalid regex for -name\n";
-                push @criteria, ['-name', $v];
+                push @criteria, ['-name', $v, undef, $negate];
+                $negate = 0;
             },
             filter => sub {
-                my ($entry, $test, $args) = @_;
-                $entry->{name} =~ $test;
+                my ($entry, $test, $args, $negate) = @_;
+                if ($negate) { $entry->{name} !~ $test; }
+                else         { $entry->{name} =~ $test; }
             },
         },
 
@@ -119,12 +326,33 @@ my %options = (
                     die "$0: option -iname requires an argument\n";
                 }
                 $v = qr/$v/i or die "$0: ivalid regex for -iname\n";
-                push @criteria, ['-iname', $v];
+                push @criteria, ['-iname', $v, undef, $negate];
+                $negate = 0;
             },
             filter => sub {
-                my ($entry, $test, $args) = @_;
-                $entry->{name} =~ $test;
+                my ($entry, $test, $args, $negate) = @_;
+                if ($negate) { $entry->{name} !~ $test; }
+                else         { $entry->{name} =~ $test; }
             },
+        },
+
+        '-regex' => {
+            option => sub {
+                my $v = shift @ARGV;
+                if (!defined $v or $v =~ /^-/) {
+                    die "$0: option -iname requires an argument\n";
+                }
+                $v = qr/$v/ or die "$0: ivalid regex for -regex\n";
+                push @criteria, ['-regex', $v, undef, $negate];
+                $negate = 0;
+            },
+            filter => sub {
+                my ($entry, $test, $args, $negate) = @_;
+                my $file = $entry->{path}.'/'.$entry->{name};
+                if ($negate) { $file !~ $test; }
+                else         { $file =~ $test; }
+            },
+
         },
 
         '-uid' => {
@@ -133,11 +361,13 @@ my %options = (
                 if (!defined $v or $v =~ /^-/) {
                     die "$0: option -uid requires an argument\n";
                 }
-                push @criteria, ['-uid', $v];
+                push @criteria, ['-uid', $v, undef, $negate];
+                $negate = 0;
             },
             filter => sub {
-                my ($entry, $test, $args) = @_;
-                return ($entry->{uid} == $test);
+                my ($entry, $test, $args, $negate) = @_;
+                my $ret = ($entry->{uid} == $test);
+                return $negate ? !$ret : $ret;
             },
         },
 
@@ -145,14 +375,140 @@ my %options = (
             option => sub {
                 my $v = shift @ARGV;
                 if (!defined $v or $v =~ /^-/) {
-                    die "$0: option -did requires an argument\n";
+                    die "$0: option -gid requires an argument\n";
                 }
-                push @criteria, ['-gid', $v];
+                push @criteria, ['-gid', $v, undef, $negate];
+                $negate = 0;
             },
             filter => sub {
-                my ($entry, $test, $args) = @_;
-                return ($entry->{gid} == $test);
+                my ($entry, $test, $args, $negate) = @_;
+                my $ret = ($entry->{gid} == $test);
+                return $negate ? !$ret : $ret;
             },
+        },
+
+        '-empty' => {
+            option => sub {
+                push @criteria, ['-empty', undef, undef, $negate];
+                $negate = 0;
+            },
+            filter => sub {
+                my ($entry, $test, $args, $negate) = @_;
+                return $negate ? $entry->{size} : !$entry->{size};
+            },
+        },
+
+        '-mtime' => {
+            option => sub {
+                my ($cmp, $val) = check_cmp_option('-mtime', shift @ARGV);
+
+                push @criteria, ['-mtime', ref_time_start($val, 86400), $cmp, $negate];
+                $negate = 0;
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp, $negate) = @_;
+                my $m = $entry->{mtime} - ($entry->{mtime} % 86400);
+
+                my $ret;
+                if    ($cmp eq '-') { $ret = ($m > $ref); }
+                elsif ($cmp eq '+') { $ret = ($m < $ref); }
+                else                { $ret = ($m == $ref); }
+
+                return $negate ? !$ret : $ret;
+            },
+        },
+
+        '-atime' => {
+            option => sub {
+                my ($cmp, $val) = check_cmp_option('-atime', shift @ARGV);
+
+                push @criteria, ['-atime', ref_time_start($val, 86400), $cmp, $negate];
+                $negate = 0;
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp, $negate) = @_;
+                my $m = $entry->{atime} - ($entry->{atime} % 86400);
+                
+                my $ret;
+                if    ($cmp eq '-') { $ret = ($m > $ref); }
+                elsif ($cmp eq '+') { $ret = ($m < $ref); }
+                else                { $ret = ($m == $ref); }
+
+                return $negate ? !$ret : $ret;
+            },
+        },
+
+        '-mmin' => {
+            option => sub {
+                my ($cmp, $val) = check_cmp_option('-mmin', shift @ARGV);
+
+                push @criteria, ['-mmin', ref_time_start($val, 60), $cmp, $negate];
+                $negate = 0;
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp, $negate) = @_;
+                my $m = $entry->{mtime} - ($entry->{mtime} % 60);
+
+                my $ret;
+                if    ($cmp eq '-') { $ret = ($m > $ref); }
+                elsif ($cmp eq '+') { $ret = ($m < $ref); }
+                else                { $ret = ($m == $ref); }
+
+                return $negate ? !$ret : $ret;
+            },
+        },
+
+        '-amin' => {
+            option => sub {
+                my ($cmp, $val) = check_cmp_option('-amin', shift @ARGV);
+
+                push @criteria, ['-amin', ref_time_start($val, 60), $cmp, $negate];
+                $negate = 0;
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp, $negate) = @_;
+                my $m = $entry->{atime} - ($entry->{atime} % 60);
+
+                my $ret;
+                if    ($cmp eq '-') { $ret = ($m > $ref); }
+                elsif ($cmp eq '+') { $ret = ($m < $ref); }
+                else                { $ret = ($m == $ref); }
+
+                return $negate ? !$ret : $ret;
+            },
+        },
+
+        '-size' => {
+            option => sub {
+                my ($cmp, $val) = check_cmp_option('-size', shift @ARGV);
+
+                push @criteria, ['-size', $val, $cmp, $negate];
+                $negate = 0;
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp, $negate) = @_;
+
+                my $ret;
+                if    ($cmp eq '-') { $ret = ($entry->{size} < $ref); }
+                elsif ($cmp eq '+') { $ret = ($entry->{size} > $ref); }
+                else                { $ret = ($entry->{size} == $ref); }
+                
+                return $negate ? !$ret : $ret;
+            },
+        },
+
+        '-maxdepth' => {
+            option => sub {
+                my $v = shift @ARGV;
+                if (!defined $v or $v =~ /^-/) {
+                    die "$0: option -maxdepth requires an argument\n";
+                }
+                $max_depth = $v;
+            },
+        },
+
+        '-depth' => {
+            option => sub { $depth_first = 1; },
         },
 
         '-print' => {
@@ -189,209 +545,18 @@ my %options = (
             },
         },
 
-        '-empty' => {
-            option => sub {
-                push @criteria, ['-empty', undef];
-            },
-            filter => sub {
-                my ($entry, $test, $args) = @_;
-                !$entry->{size};
-            },
+        '-ctime' => {
+            option => sub { die "$0: unsupported option -ctime\n"; }
         },
-
-        '-maxdepth' => {
-            option => sub {
-                my $v = shift @ARGV;
-                if (!defined $v or $v =~ /^-/) {
-                    die "$0: option -maxdepth requires an argument\n";
-                }
-                $max_depth = $v;
-            },
+        '-cmin' => {
+            option => sub { die "$0: unsupported option -cmin\n"; }
         },
-
-        '-depth' => {
-            option => sub { $depth_first = 1; },
+        '-user' => {
+            option => sub { die "$0: unsupported option -user, use -uid\n"; }
         },
-
-        '-mtime' => {
-            option => sub {
-                my $v = shift @ARGV;
-                die "$0: option -mtime requires an argument\n"
-                    unless defined $v;
-                $v =~ s/(\d+)$//
-                    or die "$0: argument to -mtime does not end with digits\n";
-                my $days = $1;
-                my $ref_time = time;
-                $ref_time = $ref_time - ($ref_time % 86400) - $days * 86400;
-                if ($v eq '-') {
-                    push @criteria, ['-mtime', $ref_time, '-'];
-                }
-                elsif ($v eq '+') {
-                    push @criteria, ['-mtime', $ref_time, '+'];
-                }
-                else {
-                    push @criteria, ['-mtime', $ref_time, '='];
-                }
-            },
-            filter => sub {
-                my ($entry, $ref, $cmp) = @_;
-                my $m = $entry->{mtime} - ($entry->{mtime} % 86400);
-
-                if ($cmp eq '-') {
-                    return ($m > $ref);
-                }
-                elsif ($cmp eq '+') {
-                    return ($m < $ref);
-                }
-                else {
-                    return ($m == $ref);
-                }
-            },
+        '-group' => {
+            option => sub { die "$0: unsupported option -group, use -gid\n"; }
         },
-
-        '-atime' => {
-            option => sub {
-                my $v = shift @ARGV;
-                die "$0: option -atime requires an argument\n"
-                    unless defined $v;
-
-                $v =~ s/(\d+)$//
-                    or die "$0: argument to -atime does not end with digits\n";
-                my $days = $1;
-
-                my $ref_time = time;
-                $ref_time = $ref_time - ($ref_time % 86400) - $days * 86400;
-
-                if ($v eq '-') {
-                    push @criteria, ['-atime', $ref_time, '-'];
-                }
-                elsif ($v eq '+') {
-                    push @criteria, ['-atime', $ref_time, '+'];
-                }
-                else {
-                    push @criteria, ['-atime', $ref_time, '='];
-                }
-            },
-            filter => sub {
-                my ($entry, $ref, $cmp) = @_;
-                my $m = $entry->{atime} - ($entry->{atime} % 86400);
-
-                if ($cmp eq '-') {
-                    return ($m > $ref);
-                }
-                elsif ($cmp eq '+') {
-                    return ($m < $ref);
-                }
-                else {
-                    return ($m == $ref);
-                }
-            },
-        },
-
-        '-mmin' => {
-            option => sub {
-                my $v = shift @ARGV;
-                die "$0: option -mmin requires an argument\n"
-                    unless defined $v;
-                $v =~ s/(\d+)$//
-                    or die "$0: argument to -mmin does not end with digits\n";
-                my $minutes = $1;
-                my $ref_time = time;
-                $ref_time = $ref_time - ($ref_time % 60) - $minutes * 60;
-                if ($v eq '-') {
-                    push @criteria, ['-mmin', $ref_time, '-'];
-                }
-                elsif ($v eq '+') {
-                    push @criteria, ['-mmin', $ref_time, '+'];
-                }
-                else {
-                    push @criteria, ['-mmin', $ref_time, '='];
-                }
-            },
-            filter => sub {
-                my ($entry, $ref, $cmp) = @_;
-                my $m = $entry->{mtime} - ($entry->{mtime} % 60);
-
-                if ($cmp eq '-') {
-                    return ($m > $ref);
-                }
-                elsif ($cmp eq '+') {
-                    return ($m < $ref);
-                }
-                else {
-                    return ($m == $ref);
-                }
-            },
-        },
-
-        '-amin' => {
-            option => sub {
-                my $v = shift @ARGV;
-                die "$0: option -amin requires an argument\n"
-                    unless defined $v;
-                $v =~ s/(\d+)$//
-                    or die "$0: argument to -amin does not end with digits\n";
-                my $minutes = $1;
-                my $ref_time = time;
-                $ref_time = $ref_time - ($ref_time % 60) - $minutes * 60;
-                if ($v eq '-') {
-                    push @criteria, ['-amin', $ref_time, '-'];
-                }
-                elsif ($v eq '+') {
-                    push @criteria, ['-amin', $ref_time, '+'];
-                }
-                else {
-                    push @criteria, ['-amin', $ref_time, '='];
-                }
-            },
-            filter => sub {
-                my ($entry, $ref, $cmp) = @_;
-                my $m = $entry->{atime} - ($entry->{atime} % 60);
-
-                if ($cmp eq '-') {
-                    return ($m > $ref);
-                }
-                elsif ($cmp eq '+') {
-                    return ($m < $ref);
-                }
-                else {
-                    return ($m == $ref);
-                }
-            },
-        },
-
-        '-size' => {
-            option => sub {
-                my $v = shift @ARGV;
-                die "$0: option -size requires an argument\n"
-                    unless defined $v;
-                $v =~ s/(\d+)$//
-                    or die "$0: argument to -size does not end with digits\n";
-                my $size = $1;
-                if ($v eq '-') {
-                    push @criteria, ['-size', $size, '-'];
-                }
-                elsif ($v eq '+') {
-                    push @criteria, ['-size', $size, '+'];
-                }
-                else {
-                    push @criteria, ['-size', $size, '='];
-                }
-            },
-            filter => sub {
-                my ($entry, $ref, $cmp) = @_;
-                if ($cmp eq '-') {
-                    return ($entry->{size} < $ref);
-                }
-                elsif ($cmp eq '+') {
-                    return ($entry->{size} > $ref);
-                }
-                else {
-                    return ($entry->{size} == $ref);
-                }
-            },
-        },
-
     );
 
 while (@ARGV) {
@@ -403,15 +568,16 @@ while (@ARGV) {
 }
 
 my $ssh = Net::SSH2->new();
-$ssh->connect($REMOTE_HOST)
-  or die "$0: failed to connect to $REMOTE_HOST $!\n";
-unless ($ssh->auth_publickey($REMOTE_USER, $PUB_KEY, $SEC_KEY)) {
+$ssh->connect($remote_host)
+  or die "$0: failed to connect to $remote_host $!\n";
+unless (authenticate($remote_user, $pub_key, $sec_key)) {
     die "$0: auth failed...\n";
 }
 
 my $sftp = $ssh->sftp()
     or die "$0: sftp() failed: ", $ssh->error,"\n";
-if ($USE_REALPATH) {
+
+if ($use_realpath) {
     my $real_base = $sftp->realpath($base_dir);
     die "$0: failed to get realpath of remote dir $base_dir\n"
         unless defined $real_base;
@@ -419,6 +585,49 @@ if ($USE_REALPATH) {
 }
 
 find($base_dir, 0);
+exit 0;
+
+sub authenticate {
+    my ($user, $pub, $sec) = @_;
+    if (!defined $pub) {
+        my @auth_list = $ssh->auth_list($user);
+        foreach my $type (@auth_list) {
+            if ($type eq 'publickey') {
+                foreach my $key (qw{ id_dsa id_rsa }) {
+                    my $file = "$ENV{HOME}/.ssh/$key";
+                    if (-e $file) {
+                        return 1
+                            if $ssh->auth_publickey($user, "$file.pub", $file);
+                    }
+                }
+            }
+            elsif ($type eq 'password') {
+                return 1
+                    if $ssh->auth_password($user, get_password($user));
+            }
+            else {
+                die "$0: FIXME: auth with method $type\n";
+            }
+        }
+        return 0;
+    }
+    else {
+        return $ssh->auth_publickey($user, $pub, $sec);
+    }
+}
+
+sub get_password {
+    my $user = shift;
+
+    require Term::ReadKey;
+
+    print STDERR "$user\@$remote_host\'s password: ";
+    Term::ReadKey::ReadMode('noecho');
+    chomp(my $value = Term::ReadKey::ReadLine(0));
+    Term::ReadKey::ReadMode('normal');
+
+    return $value;
+}
 
 sub find {
     my $name  = shift;
@@ -534,15 +743,11 @@ sub get_ls_mode {
     elsif (S_ISFIFO($entry->{mode})) { $str .= "p"; }
     elsif (S_ISCHR($entry->{mode}))  { $str .= "c"; }
     elsif (S_ISBLK($entry->{mode}))  { $str .= "b"; }
-    elsif ($entry->{mode} & 0140000)  { 
+    elsif ($entry->{mode} & 0140000)  { # Ugh! ... :)
         my $fname = $entry->{path}."/".$entry->{name};
-        my $target = $sftp->readlink($fname);
-        if (!defined $target) {
-            $str .= "s";
-        }
-        else {
-            $str .= "l";
-        }
+
+        if (!defined $sftp->readlink($fname)) { $str .= "s"; }
+        else                                  { $str .= "l"; }
     }
     else  {
         warn "$0: unknown file type: ",
@@ -578,13 +783,36 @@ sub get_ls_mode {
     return $str;
 }
 
+sub ref_time_start {
+    my ($val, $time) = @_;
+    return $^T - ($^T % $time) - ($val * $time);
+}
+
+sub check_cmp_option {
+    my $opt   = shift;
+    my $value = shift;
+    die "$0: option $opt requires an argument\n"
+        unless defined $value;
+    $value =~ /^(\+|-)?(\d+)$/
+        or die "$0: illegal value for $opt option\n";
+    return (defined $1 ? $1 : "", $2);
+}
+
 sub filter {
     my $entry = shift;
     foreach my $crit (@criteria) {
-        my ($opt, $test, $args) = @$crit;
-        $options{$opt}->{filter}->($entry, $test, $args) or return 0;
+        my @data = @$crit;
+        my $opt = shift @data;
+        $options{$opt}->{filter}->($entry, @data)
+            or return 0;
     }
     return 1;
+}
+
+sub usage {
+    return <<_END;
+$0: Usage: $0 SSH_OPTIONS [user\@]host:[DIR] [FIND_OPTIONS]
+_END
 }
 
 # vim: ts=4 sw=4 expandtab syn=perl
