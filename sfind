@@ -213,6 +213,11 @@ C<-ls> option. This is a shortcut for C<-printf '%M %u %g %s %TI %p%l\n'>
 
 L<ssh(1)>, L<sftp(1)>, L<find(1)>
 
+=head1 DOWNLOAD
+
+L<http://ankh-morp.org/code/sfind/sfind> or
+L<SVN|http://svn.ankh-morp.org:8080/tools/sfind/>
+
 =head1 AUTHOR
 
 Hanno Hecker E<lt>vetinari@ankh-morp.orgE<gt>
