@@ -209,6 +209,22 @@ C<-ls> option. This is a shortcut for C<-printf '%M %u %g %s %TI %p%l\n'>
 
 =back
 
+=head1 SEE ALSO
+
+L<ssh(1)>, L<sftp(1)>, L<find(1)>
+
+=head1 AUTHOR
+
+Hanno Hecker E<lt>vetinari@ankh-morp.orgE<gt>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2012 by Hanno Hecker; all rights reserved.
+
+This script is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself, either Perl version 5.8.0 or, at
+your option, any later version of Perl 5 you may have available.
+
 =cut
 
 use strict;
@@ -621,7 +637,7 @@ sub get_password {
 
     require Term::ReadKey;
 
-    print STDERR "$user\@$remote_host\'s password: ";
+    print STDERR "[$0] $user\@$remote_host\'s password: ";
     Term::ReadKey::ReadMode('noecho');
     chomp(my $value = Term::ReadKey::ReadLine(0));
     Term::ReadKey::ReadMode('normal');
@@ -811,7 +827,7 @@ sub filter {
 
 sub usage {
     return <<_END;
-$0: Usage: $0 SSH_OPTIONS [user\@]host:[DIR] [FIND_OPTIONS]
+$0: Usage: $0 [SSH_OPTIONS] [user\@]host:[DIR] [FIND_OPTIONS]
 _END
 }
 
