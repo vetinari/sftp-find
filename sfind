@@ -695,6 +695,9 @@ sub print_entry {
     my $entry = shift;
     my @chars = split //, $printf;
     my $out   = "";
+    my $fname = $entry->{path}."/".$entry->{name};
+    $fname =~ tr{/}{/}s;
+
     while (@chars) {
         my $chr = shift @chars;
         if ($chr eq '%') {
@@ -703,11 +706,10 @@ sub print_entry {
                 $out .= '%';
             }
             elsif ($chr eq 'p') {
-                $out .= $entry->{path}."/".$entry->{name};
+                $out .= $fname;
             }
             elsif ($chr eq 'l') {
-                my $path = $entry->{path}."/".$entry->{name};
-                my $target = $sftp->readlink($path);
+                my $target = $sftp->readlink($fname);
                 if (defined $target) {
                     $out .= " -> $target";
                 }
