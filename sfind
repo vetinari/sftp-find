@@ -625,7 +625,11 @@ sub authenticate {
             }
             elsif ($type eq 'password') {
                 return 1
-                    if $ssh->auth_password($user, get_password($user));
+                    if $ssh->auth_password($user, get_password($ssh, $user));
+            }
+            elsif ($type eq 'keyboard-interactive') {
+                return 1
+                    if $ssh->auth_keyboard($user, \&get_password);
             }
             else {
                 die "$0: FIXME: auth with method $type\n";
@@ -639,6 +643,7 @@ sub authenticate {
 }
 
 sub get_password {
+    my $ssh  = shift;
     my $user = shift;
 
     require Term::ReadKey;
@@ -655,6 +660,10 @@ sub find {
     my $name  = shift;
     my $depth = shift;
     my $dir   = $sftp->opendir($name);
+    unless ($dir) {
+        warn "$0: opendir($name) failed: ",$ssh->error,"\n";
+        return;
+    }
     my @sub_dirs;
     while (my $entry = $dir->read()) {
         if (S_ISDIR($entry->{mode})) {
