@@ -31,6 +31,10 @@ about selecting files and print them.
 
 =over 4
 
+=item --agent
+
+Try authentication with ssh-agent
+
 =item --key FILE
 
 Uses FILE.pub as public key file and FILE as private key file to authenticate
@@ -599,7 +603,7 @@ unless (authenticate($remote_user, $pub_key, $sec_key)) {
 }
 
 my $sftp = $ssh->sftp()
-    or die "$script: sftp() failed: ", $ssh->error,"\n";
+    or die "$script: sftp() failed: ", ssh_errmsg() ,"\n";
 
 if ($use_realpath) {
     my $real_base = $sftp->realpath($base_dir);
@@ -671,7 +675,7 @@ sub find {
     my $depth = shift;
     my $dir   = $sftp->opendir($name);
     unless ($dir) {
-        warn "$script: opendir($name) failed: ",$ssh->error,"\n";
+        warn "$script: opendir($name) failed: ",ssh_errmsg(),"\n";
         return;
     }
     my @sub_dirs;
@@ -864,6 +868,10 @@ sub usage {
     return <<_END;
 $script: Usage: $script [SSH_OPTIONS] [user\@]host:[DIR] [FIND_OPTIONS]
 _END
+}
+
+sub ssh_errmsg {
+    ($ssh->error)[2];
 }
 
 # vim: ts=4 sw=4 expandtab syn=perl
