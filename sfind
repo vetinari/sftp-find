@@ -157,6 +157,14 @@ If SIZE starts with a C<+>, files with a size greater than SIZE are selected.
 A leading C<-> selects files smaller than SIZE. Without any prefix: files
 which are exactly SIZE bytes.
 
+=item -mode MODE
+
+If MODE starts with a C<+>, files with a permissions of at least MODE are
+selected. Without any prefix: files which have permissions MODE bytes.
+
+NOTE: MODE must be an octal number
+
+
 =back
 
 =head2 Tree Traversal Options
@@ -524,6 +532,25 @@ my %options = (
                 return $negate ? !$ret : $ret;
             },
         },
+
+        '-mode' => {
+            option => sub {
+                my ($cmp, $val) = check_cmp_option('-mode', shift @ARGV);
+                push @criteria, ['-mode', oct($val), $cmp, $negate];
+                $negate = 0;
+            },
+            filter => sub {
+                my ($entry, $ref, $cmp, $negate) = @_;
+                my $mode = $entry->{mode} & 07777;
+                my $ret;
+                if    ($cmp eq '-') { $ret = (($mode & $ref) <= $ref); }
+                elsif ($cmp eq '+') { $ret = (($mode & $ref) >= $ref); }
+                else                { $ret = (($mode & $ref) == $mode); }
+                
+                return $negate ? !$ret : $ret;
+            },
+        },
+
 
         '-maxdepth' => {
             option => sub {
