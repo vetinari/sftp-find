@@ -240,23 +240,25 @@ use POSIX qw{ S_ISBLK S_ISCHR S_ISDIR S_ISFIFO S_ISREG
               strftime 
             };
 
-my ($remote_user, $remote_host, $key_file, $pub_key, $sec_key);
+my ($remote_user, $remote_host, $key_file, $pub_key, $sec_key, $use_ssh_agent);
 my $use_realpath;
-$0 =~ s#.*/##;
+my $script = $0;
+$script =~ s#.*/##;
 
 GetOptions(
         "user|login=s" => \$remote_user,
         "key=s" => \$key_file,
+        "agent" => \$use_ssh_agent,
         "pub-key=s" => \$pub_key,
         "sec-key=s" => \$sec_key,
         "real-path" => \$use_realpath,
     )
     or die usage();
 if (($sec_key and not $pub_key) or ($pub_key and not $sec_key)) {
-    die "$0: one of --sec-key and --pub-key is missing\n";
+    die "$script: one of --sec-key and --pub-key is missing\n";
 }
 if ($sec_key and $key_file) {
-    die "$0: cannot give --sec-key and --key at the same time\n";
+    die "$script: cannot give --sec-key and --key at the same time\n";
 }
 if ($key_file) {
     $sec_key = $key_file;
@@ -301,7 +303,7 @@ my %options = (
             option => sub {
                 my $v = shift @ARGV;
                 if (!defined $v or $v =~ /^-/) {
-                    die "$0: option -type requires an argument\n";
+                    die "$script: option -type requires an argument\n";
                 }
                 my $test;
                 if    ($v eq 'f') { $test = \&S_ISREG; }
@@ -312,7 +314,7 @@ my %options = (
                 elsif ($v eq 'l') { $test = \&S_ISLNK; }
                 elsif ($v eq 's') { $test = \&S_ISSOCK; }
                 else {
-                    die "$0: unknown argument '$v' for -type\n";
+                    die "$script: unknown argument '$v' for -type\n";
                 }
                 push @criteria, ['-type', $test, undef, $negate];
                 $negate = 0;
@@ -328,9 +330,9 @@ my %options = (
             option => sub {
                 my $v = shift @ARGV;
                 if (!defined $v or $v =~ /^-/) {
-                    die "$0: option -name requires an argument\n";
+                    die "$script: option -name requires an argument\n";
                 }
-                $v = qr/$v/ or die "$0: ivalid regex for -name\n";
+                $v = qr/$v/ or die "$script: ivalid regex for -name\n";
                 push @criteria, ['-name', $v, undef, $negate];
                 $negate = 0;
             },
@@ -345,9 +347,9 @@ my %options = (
             option => sub {
                 my $v = shift @ARGV;
                 if (!defined $v or $v =~ /^-/) {
-                    die "$0: option -iname requires an argument\n";
+                    die "$script: option -iname requires an argument\n";
                 }
-                $v = qr/$v/i or die "$0: ivalid regex for -iname\n";
+                $v = qr/$v/i or die "$script: ivalid regex for -iname\n";
                 push @criteria, ['-iname', $v, undef, $negate];
                 $negate = 0;
             },
@@ -362,9 +364,9 @@ my %options = (
             option => sub {
                 my $v = shift @ARGV;
                 if (!defined $v or $v =~ /^-/) {
-                    die "$0: option -iname requires an argument\n";
+                    die "$script: option -iname requires an argument\n";
                 }
-                $v = qr/$v/ or die "$0: ivalid regex for -regex\n";
+                $v = qr/$v/ or die "$script: ivalid regex for -regex\n";
                 push @criteria, ['-regex', $v, undef, $negate];
                 $negate = 0;
             },
@@ -381,7 +383,7 @@ my %options = (
             option => sub {
                 my $v = shift @ARGV;
                 if (!defined $v or $v =~ /^-/) {
-                    die "$0: option -uid requires an argument\n";
+                    die "$script: option -uid requires an argument\n";
                 }
                 push @criteria, ['-uid', $v, undef, $negate];
                 $negate = 0;
@@ -397,7 +399,7 @@ my %options = (
             option => sub {
                 my $v = shift @ARGV;
                 if (!defined $v or $v =~ /^-/) {
-                    die "$0: option -gid requires an argument\n";
+                    die "$script: option -gid requires an argument\n";
                 }
                 push @criteria, ['-gid', $v, undef, $negate];
                 $negate = 0;
@@ -523,7 +525,7 @@ my %options = (
             option => sub {
                 my $v = shift @ARGV;
                 if (!defined $v or $v =~ /^-/) {
-                    die "$0: option -maxdepth requires an argument\n";
+                    die "$script: option -maxdepth requires an argument\n";
                 }
                 $max_depth = $v;
             },
@@ -553,7 +555,7 @@ my %options = (
             option => sub {
                 $eol     = "";
                 $printf  = shift @ARGV;
-                die "$0: option -printf requires an argument\n"
+                die "$script: option -printf requires an argument\n"
                     unless defined $printf;
                 $ls_mode = 0;
             },
@@ -568,22 +570,22 @@ my %options = (
         },
 
         '-ctime' => {
-            option => sub { die "$0: unsupported option -ctime\n"; }
+            option => sub { die "$script: unsupported option -ctime\n"; }
         },
         '-cmin' => {
-            option => sub { die "$0: unsupported option -cmin\n"; }
+            option => sub { die "$script: unsupported option -cmin\n"; }
         },
         '-user' => {
-            option => sub { die "$0: unsupported option -user, use -uid\n"; }
+            option => sub { die "$script: unsupported option -user, use -uid\n"; }
         },
         '-group' => {
-            option => sub { die "$0: unsupported option -group, use -gid\n"; }
+            option => sub { die "$script: unsupported option -group, use -gid\n"; }
         },
     );
 
 while (@ARGV) {
     my $opt = shift @ARGV;
-    die "$0: unknown argument $opt\n"
+    die "$script: unknown argument $opt\n"
         unless exists $options{$opt};
 
     $options{$opt}->{option}();
@@ -591,17 +593,17 @@ while (@ARGV) {
 
 my $ssh = Net::SSH2->new();
 $ssh->connect($remote_host)
-  or die "$0: failed to connect to $remote_host $!\n";
+  or die "$script: failed to connect to $remote_host $!\n";
 unless (authenticate($remote_user, $pub_key, $sec_key)) {
-    die "$0: auth failed...\n";
+    die "$script: auth failed...\n";
 }
 
 my $sftp = $ssh->sftp()
-    or die "$0: sftp() failed: ", $ssh->error,"\n";
+    or die "$script: sftp() failed: ", $ssh->error,"\n";
 
 if ($use_realpath) {
     my $real_base = $sftp->realpath($base_dir);
-    die "$0: failed to get realpath of remote dir $base_dir\n"
+    die "$script: failed to get realpath of remote dir $base_dir\n"
         unless defined $real_base;
     $base_dir = $real_base;
 }
@@ -611,7 +613,15 @@ exit 0;
 
 sub authenticate {
     my ($user, $pub, $sec) = @_;
+    if ($use_ssh_agent) {
+        return 1
+            if $ssh->auth_agent($user);
+    }
     if (!defined $pub) {
+        unless ($use_ssh_agent) {
+            return 1
+                if $ssh->auth_agent($user);
+        }
         my @auth_list = $ssh->auth_list($user);
         foreach my $type (@auth_list) {
             if ($type eq 'publickey') {
@@ -632,7 +642,7 @@ sub authenticate {
                     if $ssh->auth_keyboard($user, \&get_password);
             }
             else {
-                die "$0: FIXME: auth with method $type\n";
+                die "$script: FIXME: auth with method $type\n";
             }
         }
         return 0;
@@ -648,7 +658,7 @@ sub get_password {
 
     require Term::ReadKey;
 
-    print STDERR "[$0] $user\@$remote_host\'s password: ";
+    print STDERR "[$script] $user\@$remote_host\'s password: ";
     Term::ReadKey::ReadMode('noecho');
     chomp(my $value = Term::ReadKey::ReadLine(0));
     Term::ReadKey::ReadMode('normal');
@@ -661,7 +671,7 @@ sub find {
     my $depth = shift;
     my $dir   = $sftp->opendir($name);
     unless ($dir) {
-        warn "$0: opendir($name) failed: ",$ssh->error,"\n";
+        warn "$script: opendir($name) failed: ",$ssh->error,"\n";
         return;
     }
     my @sub_dirs;
@@ -791,7 +801,7 @@ sub get_ls_mode {
     elsif (S_ISLNK($entry->{mode}))  { $str .= "l"; }
     elsif (S_ISSOCK($entry->{mode})) { $str .= "s"; }
     else  {
-        warn "$0: unknown file type: ",
+        warn "$script: unknown file type: ",
             sprintf "FILE=%s/%s MODE=%o %x\n",
                 $entry->{path}, $entry->{name}, 
                     ($entry->{mode} &~ 07777), 
@@ -832,10 +842,10 @@ sub ref_time_start {
 sub check_cmp_option {
     my $opt   = shift;
     my $value = shift;
-    die "$0: option $opt requires an argument\n"
+    die "$script: option $opt requires an argument\n"
         unless defined $value;
     $value =~ /^(\+|-)?(\d+)$/
-        or die "$0: illegal value for $opt option\n";
+        or die "$script: illegal value for $opt option\n";
     return (defined $1 ? $1 : "", $2);
 }
 
@@ -852,7 +862,7 @@ sub filter {
 
 sub usage {
     return <<_END;
-$0: Usage: $0 [SSH_OPTIONS] [user\@]host:[DIR] [FIND_OPTIONS]
+$script: Usage: $script [SSH_OPTIONS] [user\@]host:[DIR] [FIND_OPTIONS]
 _END
 }
 
