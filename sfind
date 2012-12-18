@@ -281,13 +281,13 @@ if ($user_at_host =~ s/^(([^@]+)\@)?([\w\d\.\-]+)://) {
     }
 }
 
-my @criteria = ();
-my $eol     = "\n";
-my $printf  = '%p';
-my $ls_mode = 0;
-my $max_depth = undef;
+my @criteria    = ();
+my $eol         = "\n";
+my $printf      = '%p';
+my $ls_mode     = 0;
+my $max_depth   = undef;
 my $depth_first = 0;
-my $negate = 0;
+my $negate      = 0;
 
 my %options = (
 
@@ -306,9 +306,11 @@ my %options = (
                 my $test;
                 if    ($v eq 'f') { $test = \&S_ISREG; }
                 elsif ($v eq 'd') { $test = \&S_ISDIR; }
-                elsif ($v eq 'b') { $test = \&S_ISULK; }
+                elsif ($v eq 'b') { $test = \&S_ISBLK; }
                 elsif ($v eq 'c') { $test = \&S_ISCHR; }
                 elsif ($v eq 'p') { $test = \&S_ISFIFO; }
+                elsif ($v eq 'l') { $test = \&S_ISLNK; }
+                elsif ($v eq 's') { $test = \&S_ISSOCK; }
                 else {
                     die "$0: unknown argument '$v' for -type\n";
                 }
@@ -316,10 +318,9 @@ my %options = (
                 $negate = 0;
             },
             filter => sub {
-                my ($entry, $test, $args, $negate) = @_;
+                my ($entry, $test, $chr, $negate) = @_;
                 my $ret = $test->($entry->{mode});
-                $ret = ($negate ? !$ret : $ret);
-                return $ret;
+                return ($negate ? !$ret : $ret);
             },
         },
 
@@ -755,6 +756,18 @@ sub print_entry {
     print $out, $eol;
 }
 
+# FIXME: values taken from linux:
+sub S_ISSOCK {
+    my $mode = shift;
+    ($mode & 0140000) == 0140000;
+}
+
+sub S_ISLNK {
+    my $mode = shift;
+    ($mode & 0120000) == 0120000;
+}
+
+
 sub get_ls_mode {
     my $entry = shift;
     my $str   = '';
@@ -764,12 +777,8 @@ sub get_ls_mode {
     elsif (S_ISFIFO($entry->{mode})) { $str .= "p"; }
     elsif (S_ISCHR($entry->{mode}))  { $str .= "c"; }
     elsif (S_ISBLK($entry->{mode}))  { $str .= "b"; }
-    elsif ($entry->{mode} & 0140000)  { # Ugh! ... :)
-        my $fname = $entry->{path}."/".$entry->{name};
-
-        if (!defined $sftp->readlink($fname)) { $str .= "s"; }
-        else                                  { $str .= "l"; }
-    }
+    elsif (S_ISLNK($entry->{mode}))  { $str .= "l"; }
+    elsif (S_ISSOCK($entry->{mode})) { $str .= "s"; }
     else  {
         warn "$0: unknown file type: ",
             sprintf "FILE=%s/%s MODE=%o %x\n",
