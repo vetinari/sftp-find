@@ -258,8 +258,12 @@ use Getopt::Long  qw{ :config require_order };
 use POSIX qw{ S_ISBLK S_ISCHR S_ISDIR S_ISFIFO S_ISREG 
               strftime 
             };
+## host key:
+use MIME::Base64;
+use Digest::HMAC_SHA1 qw{ hmac_sha1 };
+use Digest::SHA qw{ sha1_base64 };
 
-my $HAVE_AUTH_AGENT = (defined &Net::SSH2::auth_agent
+my $HAVE_AUTH_AGENT = ($Net::SSH2::VERSION >= 0.40
                         and (libssh2_version() >= 10203));
 
 my ($remote_user, $remote_host, $key_file, $pub_key, $sec_key);
@@ -638,6 +642,9 @@ while (@ARGV) {
 my $ssh = Net::SSH2->new();
 $ssh->connect($remote_host)
   or die "$script: failed to connect to $remote_host $!\n";
+
+check_known_hosts($remote_host);
+
 unless (authenticate($remote_user, $pub_key, $sec_key)) {
     die "$script: auth failed...\n";
 }
@@ -920,6 +927,59 @@ sub libssh2_version {
     }
     else {
         return (sprintf "%2d%02d", $2, $3)+0;
+    }
+}
+
+sub remote_hostkey {
+    my $key = $ssh->hostkey("SHA1");
+    $key = encode_base64($key);
+    $key =~ s/=*\n$//;
+    return $key;
+}
+
+sub known_hosts_key {
+    my $host = shift;
+
+    open my $known_hosts, "$ENV{HOME}/.ssh/known_hosts"
+        or return "";
+
+    while (<$known_hosts>) {
+        chomp;
+        if (s/^\|1\|//) {
+            next unless /^([^|]+)\|(.*?)\s+(\S+)\s+(\S+)$/;
+            my ($salt, $hash, $key) = ($1, $2, $4);
+            $salt = decode_base64($salt);
+            $hash = decode_base64($hash);
+            if ($hash eq hmac_sha1($host, $salt)) {
+                close $known_hosts;
+                return sha1_base64( decode_base64($key) );
+            }
+        }
+        else {
+            next unless /^(\S+)\s+\S+\s+(\S+)$/;
+            my ($host_part, $key) = ($1, $2);
+            if ($host_part =~ /^\Q$host\E(,\S+)?$/) {
+                close $known_hosts;
+                return sha1_base64( decode_base64($key) );
+            }
+        }
+    }
+    close $known_hosts;
+    return "";
+}
+
+sub check_known_hosts {
+    my $remote          = shift;
+    my $remote_host_key = remote_hostkey();
+    die "$script: failed to get remote hostkey...\n"
+        unless $remote_host_key;
+
+    unless ($remote_host_key eq known_hosts_key($remote)) {
+        print STDERR  "$script: unknown hostkey for $remote,\n",
+                      "       do you really want to continue? [y/N] ";
+        require Term::ReadKey;
+        chomp(my $value = Term::ReadKey::ReadLine(0));
+        exit 1 unless $value =~ /^y(es)?$/i;
     }
 }
 
