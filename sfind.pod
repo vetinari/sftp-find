@@ -59,6 +59,14 @@ whatever is in the environment variable C<USER>
 Files will be printed with full path instead of relative, uses L<sftp(1)>s
 C<realpath> call.
 
+=item --no-host-key-check
+
+Do not attempt to verify the remote host from I<~/.ssh/known_hosts>.
+
+=item --debug
+
+Be verbose about ssh connection
+
 =back
 
 =head2 Filter Options

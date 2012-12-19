@@ -19,9 +19,9 @@ use Digest::SHA qw{ sha1_base64 };
 
 my $HAVE_AUTH_AGENT = ($Net::SSH2::VERSION >= 0.40
                         and (libssh2_version() >= 10203));
-
+my $DEBUG = 0;
 my ($remote_user, $remote_host, $key_file, $pub_key, $sec_key);
-my ($use_realpath, $use_ssh_agent);
+my ($use_realpath, $use_ssh_agent, $no_host_key_check);
 my $script = $0;
 $script =~ s#.*/##;
 
@@ -36,6 +36,8 @@ GetOptions(
         "pub-key=s" => \$pub_key,
         "sec-key=s" => \$sec_key,
         "real-path" => \$use_realpath,
+        "no-host-key-check" => \$no_host_key_check,
+        "debug"     => \$DEBUG,
     )
     or die usage();
 if (($sec_key and not $pub_key) or ($pub_key and not $sec_key)) {
@@ -394,15 +396,18 @@ while (@ARGV) {
 }
 
 my $ssh = Net::SSH2->new();
+
+debug("connecting to $remote_host");
 $ssh->connect($remote_host)
   or die "$script: failed to connect to $remote_host $!\n";
 
-check_known_hosts($remote_host);
+check_known_hosts($remote_host)
+    unless $no_host_key_check;
 
-unless (authenticate($remote_user, $pub_key, $sec_key)) {
-    die "$script: auth failed...\n";
-}
+die "$script: auth failed...\n"
+    unless authenticate($remote_user, $pub_key, $sec_key);
 
+debug("requesting subsystem 'sftp'");
 my $sftp = $ssh->sftp()
     or die "$script: sftp() failed: ", ssh_errmsg() ,"\n";
 
@@ -413,46 +418,63 @@ if ($use_realpath) {
     $base_dir = $real_base;
 }
 
-find($base_dir, 0);
+debug("starting find()...");
+find($base_dir, 1);
 exit 0;
 
 sub authenticate {
     my ($user, $pub, $sec) = @_;
-    return 1
-            if $use_ssh_agent and $ssh->auth_agent($user);
-    if (!defined $pub) {
-        if ($HAVE_AUTH_AGENT and not $use_ssh_agent) {
-            return 1
-                    if $ssh->auth_agent($user);
-        }
-        my @auth_list = $ssh->auth_list($user);
-        foreach my $type (@auth_list) {
-            if ($type eq 'publickey') {
-                foreach my $key (qw{ id_dsa id_rsa }) {
-                    my $file = "$ENV{HOME}/.ssh/$key";
-                    if (-e $file) {
-                        return 1
-                            if $ssh->auth_publickey($user, "$file.pub", $file);
+
+    if ($use_ssh_agent and $ssh->auth_agent($user)) {
+        debug("auth w/ requested auth agent succeeded");
+        return 1;
+    }
+
+    if (defined $pub) {
+        debug("trying 'publickey' with $pub / $sec...");
+        return $ssh->auth_publickey($user, $pub, $sec);
+    }
+
+    if ($HAVE_AUTH_AGENT and not $use_ssh_agent) {
+        debug("trying auth agent...");
+        return 1
+            if $ssh->auth_agent($user);
+    }
+
+    my @auth_list = $ssh->auth_list($user);
+    while (@auth_list) {
+        debug("auth methods left: ", join(", ", @auth_list));
+        my $type = shift @auth_list;
+
+        if ($type eq 'publickey') {
+            foreach my $key (qw{ id_dsa id_rsa }) {
+                my $file = "$ENV{HOME}/.ssh/$key";
+                if (-e $file) {
+                    debug("trying 'publickey' with $file...");
+                    if ($ssh->auth_publickey($user, "$file.pub", $file)) {
+                        debug("auth as $user with public key $file succeeded");
+                        return 1;
                     }
                 }
             }
-            elsif ($type eq 'password') {
-                return 1
-                    if $ssh->auth_password($user, get_password($ssh, $user));
-            }
-            elsif ($type eq 'keyboard-interactive') {
-                return 1
-                    if $ssh->auth_keyboard($user, \&get_password);
-            }
-            else {
-                die "$script: FIXME: auth with method $type\n";
-            }
         }
-        return 0;
+        elsif ($type eq 'password') {
+            debug("trying auth w/ 'password'...");
+            return 1
+                if $ssh->auth_password($user, get_password($ssh, $user));
+        }
+        elsif ($type eq 'keyboard-interactive') {
+            debug("trying auth w/ 'keyboard-interactive'...");
+            return 1
+                if $ssh->auth_keyboard($user, \&get_password);
+        }
+        else {
+            die "$script: FIXME: auth with method $type\n";
+        }
     }
-    else {
-        return $ssh->auth_publickey($user, $pub, $sec);
-    }
+    
+    debug("all auth methods failed...");
+    return 0;
 }
 
 sub get_password {
@@ -474,7 +496,7 @@ sub find {
     my $depth = shift;
     my $dir   = $sftp->opendir($name);
     unless ($dir) {
-        warn "$script: opendir($name) failed: ",ssh_errmsg(),"\n";
+        warn "$script: '$name': ",ssh_errmsg(),"\n";
         return;
     }
     my @sub_dirs;
@@ -565,6 +587,9 @@ sub print_entry {
                 elsif ($chr eq 'I') {
                     $out .= strftime('%Y-%m-%d %H:%M:%S', localtime($entry->{mtime}));
                 }
+            }
+            else {
+                die "$script: unknown format \%$chr\n";
             }
         }
         elsif ($chr eq '\\') {
@@ -734,6 +759,14 @@ sub check_known_hosts {
         require Term::ReadKey;
         chomp(my $value = Term::ReadKey::ReadLine(0));
         exit 1 unless $value =~ /^y(es)?$/i;
+    }
+}
+
+sub debug {
+    if ($DEBUG) {
+        my @msg = @_;
+        chomp @msg;
+        print STDERR @msg,"\n";
     }
 }
 
