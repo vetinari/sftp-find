@@ -259,11 +259,11 @@ use POSIX qw{ S_ISBLK S_ISCHR S_ISDIR S_ISFIFO S_ISREG
               strftime 
             };
 
-my $HAVE_AUTH_AGENT = (defined &Net::SSH::auth_agent
+my $HAVE_AUTH_AGENT = (defined &Net::SSH2::auth_agent
                         and (libssh2_version() >= 10203));
 
-my ($remote_user, $remote_host, $key_file, $pub_key, $sec_key, $use_ssh_agent);
-my $use_realpath;
+my ($remote_user, $remote_host, $key_file, $pub_key, $sec_key);
+my ($use_realpath, $use_ssh_agent);
 my $script = $0;
 $script =~ s#.*/##;
 
@@ -913,7 +913,7 @@ sub ssh_errmsg {
 }
 
 sub libssh2_version {
-    my $version = scalar Net::SSH::version();
+    my $version = scalar Net::SSH2::version();
     $version =~ /^(\d+)\.(\d+)\.(\d+)/;
     if ($1 >= 1) {
         return (sprintf "%d%02d%02d", $1, $2, $3)+0;
