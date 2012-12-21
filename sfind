@@ -20,26 +20,31 @@ use Digest::SHA qw{ sha1_base64 };
 my $HAVE_AUTH_AGENT = ($Net::SSH2::VERSION >= 0.40
                         and (libssh2_version() >= 10203));
 my $DEBUG = 0;
-my ($remote_user, $remote_host, $key_file, $pub_key, $sec_key);
+my ($remote_user, $remote_host, $remote_port, $key_file, $pub_key, $sec_key);
 my ($use_realpath, $use_ssh_agent, $no_host_key_check);
+my $USER = scalar(getpwuid($<)) || $ENV{USER};
+my ($HOME) = (getpwuid($<))[7]  || $ENV{HOME};
+
 my $script = $0;
 $script =~ s#.*/##;
 
 GetOptions(
-        "user|login=s" => \$remote_user,
-        "key=s" => \$key_file,
-        "agent" => sub {
+        "user|login|l=s"        => \$remote_user,
+        "key|identify-file|i=s" => \$key_file,
+        "port|p=i"              => \$remote_port,
+        "agent|a" => sub {
                 die "$script: --agent not supported by Net::SSH2 / libssh2\n"
                     unless $HAVE_AUTH_AGENT;
                 $use_ssh_agent = 1;
             },
-        "pub-key=s" => \$pub_key,
-        "sec-key=s" => \$sec_key,
-        "real-path" => \$use_realpath,
-        "no-host-key-check" => \$no_host_key_check,
-        "debug"     => \$DEBUG,
+        "pub-key=s"             => \$pub_key,
+        "sec-key=s"             => \$sec_key,
+        "real-path"             => \$use_realpath,
+        "no-host-key-check"     => \$no_host_key_check,
+        "debug|d"               => \$DEBUG,
     )
     or die usage();
+
 if (($sec_key and not $pub_key) or ($pub_key and not $sec_key)) {
     die "$script: one of --sec-key and --pub-key is missing\n";
 }
@@ -51,8 +56,9 @@ if ($key_file) {
     $pub_key = "$key_file.pub";
 }
 if (!$remote_user) {
-    $remote_user = $ENV{USER};
+    $remote_user = $USER;
 }
+$remote_port ||= scalar(getservbyname("ssh", "tcp")) || 22;
 
 my $user_at_host = shift @ARGV
   or die usage();
@@ -397,9 +403,9 @@ while (@ARGV) {
 
 my $ssh = Net::SSH2->new();
 
-debug("connecting to $remote_host");
-$ssh->connect($remote_host)
-  or die "$script: failed to connect to $remote_host $!\n";
+debug("connecting to $remote_host:$remote_port");
+$ssh->connect($remote_host, $remote_port)
+  or die "$script: failed to connect to $remote_host:$remote_port: $!\n";
 
 check_known_hosts($remote_host)
     unless $no_host_key_check;
@@ -448,7 +454,7 @@ sub authenticate {
 
         if ($type eq 'publickey') {
             foreach my $key (qw{ id_dsa id_rsa }) {
-                my $file = "$ENV{HOME}/.ssh/$key";
+                my $file = "$HOME/.ssh/$key";
                 if (-e $file) {
                     debug("trying 'publickey' with $file...");
                     if ($ssh->auth_publickey($user, "$file.pub", $file)) {
@@ -719,7 +725,7 @@ sub remote_hostkey {
 sub known_hosts_key {
     my $host = shift;
 
-    open my $known_hosts, "$ENV{HOME}/.ssh/known_hosts"
+    open my $known_hosts, "$HOME/.ssh/known_hosts"
         or return "";
 
     while (<$known_hosts>) {

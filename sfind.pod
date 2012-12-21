@@ -18,6 +18,10 @@ via L<ssh(1)> / L<sftp(1)>. It behaves similar to L<find(1)>, though some
 restrictions are given, because not all information is available via sftp's
 L<stat(2)> method.
 
+Note: this is B<much> slower than calling I<find> on the remote host because
+B<all> stat info passes the network. If you have the permission to execute
+I<find> on the remote host, use it...
+
 =head1 OPTIONS
 
 The options are divided into two parts, the first one configures where to 
@@ -28,11 +32,17 @@ about selecting files and print them.
 
 =over 4
 
+=item -a
+
 =item --agent
 
 Try authentication with ssh-agent
 
+=item -i FILE
+
 =item --key FILE
+
+=item --identity-file FILE
 
 Uses FILE.pub as public key file and FILE as private key file to authenticate
 at the remote system.
@@ -47,7 +57,17 @@ also a C<--sec-key> option and C<--key> must not be present.
 Uses FILE as the secret key for authentication. Note that this option requires
 also a C<--pub-key> option and C<--key> must not be present.
 
-=item --user NAME / --login NAME
+=item -p PORT
+
+=item --port PORT
+
+Use port PORT to connect to instead of the default port 22.
+
+=item -l NAME
+
+=item --user NAME 
+
+=item --login NAME
 
 The authenication will be tried as user NAME at the remote system. Note that
 a user part in the remote system name will override this setting. If neither
@@ -62,6 +82,8 @@ C<realpath> call.
 =item --no-host-key-check
 
 Do not attempt to verify the remote host from I<~/.ssh/known_hosts>.
+
+=item -d
 
 =item --debug
 
