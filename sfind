@@ -15,7 +15,10 @@ use POSIX qw{ S_ISBLK S_ISCHR S_ISDIR S_ISFIFO S_ISREG
 ## host key:
 use MIME::Base64;
 use Digest::HMAC_SHA1 qw{ hmac_sha1 };
-use Digest::SHA qw{ sha1_base64 };
+use Digest::SHA qw{ sha1_base64 sha1 };
+use Socket;
+
+use Time::HiRes qw{ gettimeofday tv_interval };
 
 my $HAVE_AUTH_AGENT = ($Net::SSH2::VERSION >= 0.40
                         and (libssh2_version() >= 10203));
@@ -55,9 +58,7 @@ if ($key_file) {
     $sec_key = $key_file;
     $pub_key = "$key_file.pub";
 }
-if (!$remote_user) {
-    $remote_user = $USER;
-}
+$remote_user ||= $USER;
 $remote_port ||= scalar(getservbyname("ssh", "tcp")) || 22;
 
 my $user_at_host = shift @ARGV
@@ -406,6 +407,7 @@ my $ssh = Net::SSH2->new();
 debug("connecting to $remote_host:$remote_port");
 $ssh->connect($remote_host, $remote_port)
   or die "$script: failed to connect to $remote_host:$remote_port: $!\n";
+debug("connected to ",remote_ip(),"...");
 
 check_known_hosts($remote_host)
     unless $no_host_key_check;
@@ -500,12 +502,14 @@ sub get_password {
 sub find {
     my $name  = shift;
     my $depth = shift;
+
     my $dir   = $sftp->opendir($name);
     unless ($dir) {
         warn "$script: '$name': ",ssh_errmsg(),"\n";
         return;
     }
-    my @sub_dirs;
+
+    my @sub_dirs = ();
     while (my $entry = $dir->read()) {
         if (S_ISDIR($entry->{mode})) {
             next if $entry->{name} =~ /^\.\.?$/;
@@ -543,47 +547,30 @@ sub print_entry {
         my $chr = shift @chars;
         if ($chr eq '%') {
             $chr = shift @chars;
-            if ($chr eq '%') {
-                $out .= '%';
-            }
-            elsif ($chr eq 'p') {
-                $out .= $fname;
-            }
+            if    ($chr eq '%') { $out .= '%';             }
+            elsif ($chr eq 'p') { $out .= $fname;          }
+            elsif ($chr eq 'f') { $out .= $entry->{name};  }
+            elsif ($chr eq 'h') { $out .= $entry->{path};  }
+            elsif ($chr eq 's') { $out .= $entry->{size};  }
+
+            elsif ($chr eq 'm') { $out .= sprintf "%o", $entry->{mode}; }
+            elsif ($chr eq 'M') { $out .= get_ls_mode($entry); }
+
+            elsif ($chr eq 't') { $out .= $entry->{mtime}; }
+            elsif ($chr eq 'a') { $out .= $entry->{atime}; }
+
+            elsif ($chr eq 'd') { $out .= $entry->{depth}; }
+
+            elsif ($chr eq 'u') { $out .= $entry->{uid};   }
+            elsif ($chr eq 'U') { $out .= $entry->{uid};   }
+            elsif ($chr eq 'g') { $out .= $entry->{gid};   }
+            elsif ($chr eq 'G') { $out .= $entry->{gid};   }
+
             elsif ($chr eq 'l') {
                 my $target = $sftp->readlink($fname);
                 if (defined $target) {
                     $out .= " -> $target";
                 }
-            }
-            elsif ($chr eq 'f') {
-                $out .= $entry->{name};
-            }
-            elsif ($chr eq 'h') {
-                $out .= $entry->{path};
-            }
-            elsif ($chr eq 's') {
-                $out .= $entry->{size};
-            }
-            elsif ($chr eq 'm') {
-                $out .= sprintf "%o", $entry->{mode};
-            }
-            elsif ($chr eq 'M') {
-                $out .= get_ls_mode($entry);
-            }
-            elsif ($chr eq 'a') {
-                $out .= $entry->{atime};
-            }
-            elsif ($chr eq 'u' or $chr eq 'U') {
-                $out .= $entry->{uid};
-            }
-            elsif ($chr eq 'g' or $chr eq 'G') {
-                $out .= $entry->{gid};
-            }
-            elsif ($chr eq 't') {
-                $out .= $entry->{mtime};
-            }
-            elsif ($chr eq 'd') {
-                $out .= $entry->{depth};
             }
             elsif ($chr eq 'T') {
                 $chr = shift @chars;
@@ -612,15 +599,8 @@ sub print_entry {
 }
 
 # FIXME: values taken from linux:
-sub S_ISSOCK {
-    my $mode = shift;
-    ($mode & 0140000) == 0140000;
-}
-
-sub S_ISLNK {
-    my $mode = shift;
-    ($mode & 0120000) == 0120000;
-}
+sub S_ISSOCK { ($_[0] & 0140000) == 0140000; }
+sub S_ISLNK  { ($_[0] & 0120000) == 0120000; }
 
 
 sub get_ls_mode {
@@ -700,9 +680,7 @@ $script: Usage: $script [SSH_OPTIONS] [user\@]host:[DIR] [FIND_OPTIONS]
 _END
 }
 
-sub ssh_errmsg {
-    ($ssh->error)[2];
-}
+sub ssh_errmsg { ($ssh->error)[2]; }
 
 sub libssh2_version {
     my $version = scalar Net::SSH2::version();
@@ -713,13 +691,6 @@ sub libssh2_version {
     else {
         return (sprintf "%2d%02d", $2, $3)+0;
     }
-}
-
-sub remote_hostkey {
-    my $key = $ssh->hostkey("SHA1");
-    $key = encode_base64($key);
-    $key =~ s/=*\n$//;
-    return $key;
 }
 
 sub known_hosts_key {
@@ -737,7 +708,7 @@ sub known_hosts_key {
             $hash = decode_base64($hash);
             if ($hash eq hmac_sha1($host, $salt)) {
                 close $known_hosts;
-                return sha1_base64( decode_base64($key) );
+                return sha1( decode_base64($key) );
             }
         }
         else {
@@ -745,7 +716,7 @@ sub known_hosts_key {
             my ($host_part, $key) = ($1, $2);
             if ($host_part =~ /^\Q$host\E(,\S+)?$/) {
                 close $known_hosts;
-                return sha1_base64( decode_base64($key) );
+                return sha1( decode_base64($key) );
             }
         }
     }
@@ -754,18 +725,28 @@ sub known_hosts_key {
 }
 
 sub check_known_hosts {
-    my $remote          = shift;
-    my $remote_host_key = remote_hostkey();
-    die "$script: failed to get remote hostkey...\n"
-        unless $remote_host_key;
+    my $remote = shift;
 
-    unless ($remote_host_key eq known_hosts_key($remote)) {
-        print STDERR  "$script: unknown hostkey for $remote,\n",
-                      "       do you really want to continue? [y/N] ";
+    unless ($ssh->hostkey("SHA1") eq known_hosts_key($remote)) {
+        printf STDERR "The authenticity of host '%s (%s)' can't be established.
+%s key fingerprint is %s.
+Are you sure you want to continue connecting (yes/no)? ",
+                $remote, remote_ip(), hostkey_type(), hostkey_hex();
         require Term::ReadKey;
         chomp(my $value = Term::ReadKey::ReadLine(0));
-        exit 1 unless $value =~ /^y(es)?$/i;
+        exit 1 unless $value eq 'yes';
     }
+}
+
+sub hostkey_type { $ssh->method('HOSTKEY') eq 'ssh-rsa' ? 'RSA' : 'DSA'; }
+
+sub remote_ip    { inet_ntoa((sockaddr_in($ssh->sock->peername))[1]); }
+
+sub hostkey_hex {
+    join(":", map {
+                sprintf "%02x", $_ 
+            }
+            unpack("C2 C2 C2 C2 C2 C2 C2 C2", $ssh->hostkey("MD5")));
 }
 
 sub debug {
