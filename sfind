@@ -15,7 +15,7 @@ use POSIX qw{ S_ISBLK S_ISCHR S_ISDIR S_ISFIFO S_ISREG
 ## host key:
 use MIME::Base64;
 use Digest::HMAC_SHA1 qw{ hmac_sha1 };
-use Digest::SHA qw{ sha1_base64 sha1 };
+use Digest::SHA qw{ sha1 };
 use Socket;
 
 use Time::HiRes qw{ gettimeofday tv_interval };
@@ -738,22 +738,19 @@ Are you sure you want to continue connecting (yes/no)? ",
     }
 }
 
-sub hostkey_type { $ssh->method('HOSTKEY') eq 'ssh-rsa' ? 'RSA' : 'DSA'; }
+sub hostkey_type { $ssh->method('HOSTKEY') eq 'ssh-rsa' ? 'RSA' : 'DSS'; }
 
 sub remote_ip    { inet_ntoa((sockaddr_in($ssh->sock->peername))[1]); }
 
 sub hostkey_hex {
-    join(":", map {
-                sprintf "%02x", $_ 
-            }
-            unpack("C2 C2 C2 C2 C2 C2 C2 C2", $ssh->hostkey("MD5")));
+    join ":", map { sprintf "%02x", $_ } unpack("C*", $ssh->hostkey("MD5"));
 }
 
 sub debug {
     if ($DEBUG) {
         my @msg = @_;
         chomp @msg;
-        print STDERR @msg,"\n";
+        print STDERR sprintf "%d.%06d - %s\n", gettimeofday, join("", @msg)
     }
 }
 
