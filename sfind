@@ -63,6 +63,8 @@ $remote_port ||= scalar(getservbyname("ssh", "tcp")) || 22;
 
 my $user_at_host = shift @ARGV
   or die usage();
+die "$script: missing colon after hostname?\n", usage()
+  unless $user_at_host =~ /:/;
 
 my ($user, $host, $base_dir);
 if ($user_at_host =~ s/^(([^@]+)\@)?([\w\d\.\-]+)://) {
