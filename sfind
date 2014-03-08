@@ -9,8 +9,8 @@ use strict;
 use warnings;
 use Net::SSH2;
 use Getopt::Long  qw{ :config require_order };
-use POSIX qw{ S_ISBLK S_ISCHR S_ISDIR S_ISFIFO S_ISREG 
-              strftime 
+use POSIX qw{ S_ISBLK S_ISCHR S_ISDIR S_ISFIFO S_ISREG
+              strftime
             };
 ## host key:
 use MIME::Base64;
@@ -247,7 +247,7 @@ my %options = (
             filter => sub {
                 my ($entry, $ref, $cmp, $negate) = @_;
                 my $m = $entry->{atime} - ($entry->{atime} % 86400);
-                
+
                 my $ret;
                 if    ($cmp eq '-') { $ret = ($m > $ref); }
                 elsif ($cmp eq '+') { $ret = ($m < $ref); }
@@ -311,7 +311,7 @@ my %options = (
                 if    ($cmp eq '-') { $ret = ($entry->{size} < $ref); }
                 elsif ($cmp eq '+') { $ret = ($entry->{size} > $ref); }
                 else                { $ret = ($entry->{size} == $ref); }
-                
+
                 return $negate ? !$ret : $ret;
             },
         },
@@ -329,7 +329,7 @@ my %options = (
                 if    ($cmp eq '-') { $ret = (($mode & $ref) < $ref); }
                 elsif ($cmp eq '+') { $ret = (($mode & $ref) >= $ref); }
                 else                { $ret = ($mode == $ref); }
-                
+
                 return $negate ? !$ret : $ret;
             },
         },
@@ -482,7 +482,7 @@ sub authenticate {
             die "$script: FIXME: auth with method $type\n";
         }
     }
-    
+
     debug("all auth methods failed...");
     return 0;
 }
@@ -596,7 +596,7 @@ sub print_entry {
             $out .= $chr;
         }
     }
-    
+
     print $out, $eol;
 }
 
@@ -619,8 +619,8 @@ sub get_ls_mode {
     else  {
         warn "$script: unknown file type: ",
             sprintf "FILE=%s/%s MODE=%o %x\n",
-                $entry->{path}, $entry->{name}, 
-                    ($entry->{mode} &~ 07777), 
+                $entry->{path}, $entry->{name},
+                    ($entry->{mode} &~ 07777),
                     ($entry->{mode} &~ 07777);
         $str .= "U";
     }
