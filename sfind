@@ -20,6 +20,10 @@ use Socket;
 
 use Time::HiRes qw{ gettimeofday tv_interval };
 
+use constant PRINT_NOT   => 0;
+use constant PRINT_ENTRY => 1;
+use constant PRINT_REALLY => 2;
+
 my $HAVE_AUTH_AGENT = ($Net::SSH2::VERSION >= 0.40
                         and (libssh2_version() >= 10203));
 my $DEBUG = 0;
@@ -61,6 +65,7 @@ if ($key_file) {
 $remote_user ||= $USER;
 $remote_port ||= scalar(getservbyname("ssh", "tcp")) || 22;
 
+my ($delete, $print_mode) = (0, PRINT_ENTRY);
 my $user_at_host = shift @ARGV
   or die usage();
 die "$script: missing colon after hostname?\n", usage()
@@ -334,6 +339,16 @@ my %options = (
             },
         },
 
+        '-delete' => {
+            option => sub {
+                $delete = 1;
+                $depth_first = 1;
+                unless ($print_mode == PRINT_REALLY) {
+                    $print_mode = PRINT_NOT;
+                }
+            },
+        },
+
         '-maxdepth' => {
             option => sub {
                 my $v = shift @ARGV;
@@ -353,6 +368,7 @@ my %options = (
                 $eol     = "\n";
                 $printf  = '%p';
                 $ls_mode = 0;
+                $print_mode = PRINT_REALLY;
             },
         },
 
@@ -361,6 +377,7 @@ my %options = (
                 $eol     = "\0";
                 $printf  = '%p';
                 $ls_mode = 0;
+                $print_mode = PRINT_REALLY;
             },
         },
 
@@ -371,6 +388,7 @@ my %options = (
                 die "$script: option -printf requires an argument\n"
                     unless defined $printf;
                 $ls_mode = 0;
+                $print_mode = PRINT_REALLY;
             },
         },
 
@@ -379,6 +397,7 @@ my %options = (
                 $eol     = "\n";
                 $printf  = '%M %u %g %s %TI %p%l';
                 $ls_mode = 1;
+                $print_mode = PRINT_REALLY;
             },
         },
 
@@ -402,6 +421,9 @@ while (@ARGV) {
         unless exists $options{$opt};
 
     $options{$opt}->{option}();
+}
+unless ($print_mode == PRINT_NOT) {
+    $print_mode = PRINT_REALLY;
 }
 
 my $ssh = Net::SSH2->new();
@@ -529,13 +551,27 @@ sub find {
         $entry->{path}  = $name;
         $entry->{depth} = $depth;
         if (filter($entry)) {
-            print_entry($entry);
+            delete_entry($entry)
+                if $delete;
+            print_entry($entry)
+                if $print_mode != PRINT_NOT;
         }
     }
 
     foreach (@sub_dirs) {
         find($_, $depth + 1);
     }
+}
+
+sub delete_entry {
+    my $entry = shift;
+    my $remove = 'unlink';
+    if (S_ISDIR($entry->{mode})) {
+        $remove = 'rmdir';
+    }
+    $sftp->$remove($entry->{path}."/".$entry->{name})
+        or warn "$script: failed to delete ",$entry->{path}."/".$entry->{name},
+                ": ",($sftp->error())[1],"\n";
 }
 
 sub print_entry {

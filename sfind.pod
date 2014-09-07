@@ -165,6 +165,10 @@ Files' group id is equal to NUMBER
 
 Shortcut for C<-size 0>, note that it does not match empty directories
 
+=item -delete
+
+Deletes the matching entries
+
 =item -mtime TIME
 
 If time starts with a C<+>, files modification time older than TIME days.
