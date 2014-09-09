@@ -163,11 +163,8 @@ Files' group id is equal to NUMBER
 
 =item -empty 
 
-Shortcut for C<-size 0>, note that it does not match empty directories
-
-=item -delete
-
-Deletes the matching entries
+Shortcut for C<-size 0>, note that it only matches empty directories when used
+with C<-depth>.
 
 =item -mtime TIME
 
@@ -217,6 +214,14 @@ Only descend DEPTH levels deep.
 
 Does a depth first search, i.e. directories are descended as soon as one is 
 found. Default is to process contents first, then descend.
+
+=back
+
+=head2 Action Options
+
+=item -delete
+
+Deletes the matching entries
 
 =back
 
