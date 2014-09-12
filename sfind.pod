@@ -215,6 +215,11 @@ Only descend DEPTH levels deep.
 Does a depth first search, i.e. directories are descended as soon as one is 
 found. Default is to process contents first, then descend.
 
+=item -sort
+
+Sorts the filenames in the current directory alphabetically before processing
+them.
+
 =back
 
 =head2 Action Options
@@ -230,6 +235,12 @@ Deletes the matching entries
 Changes permissions on the files / directories. MODE can be an octal mode like
 C<0755> or something like C<ug+rw,o-rwx>. Multiple changes can be combined
 with a comma (C<,>). See also L<chmod(1)> (changes with C<X> are not supported).
+
+=item -rename CODE
+
+Renames the file, works similar to L<rename(1)>. CODE must be a valid perl code
+to transform the filename (only the file name will be given in C<$_>, excluding
+the path).
 
 =back
 

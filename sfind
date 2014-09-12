@@ -92,6 +92,8 @@ my $negate      = 0;
 my $delete      = 0;
 my @chmod       = ();
 my $print_mode  = PRINT_ENTRY;
+my $rename      = undef;
+my $sort_dir    = 0;
 
 my %options = (
 
@@ -345,6 +347,12 @@ my %options = (
             },
         },
 
+        '-sort' => {
+            option => sub {
+                $sort_dir = 1;
+            },
+        },
+
         '-delete' => {
             option => sub {
                 $delete = 1;
@@ -362,6 +370,16 @@ my %options = (
                 unless ($print_mode == PRINT_REALLY) {
                     $print_mode = PRINT_NOT;
                 }
+            },
+        },
+
+        '-rename' => {
+            option => sub {
+                my $v = shift @ARGV;
+                if (!defined $v) {
+                    die "$script: option -rename requires an argument\n";
+                }
+                $rename = $v;
             },
         },
 
@@ -552,17 +570,20 @@ sub find {
     my @entries  = ();
     my @sub_dirs = ();
     while (my $entry = $dir->read()) {
+        next if $entry->{name} =~ /^\.\.?$/;
         push @entries, $entry;
     }
     undef $dir;
 
-    return 1 if @entries == 2;
+    return 1 unless @entries;
+
+    if ($sort_dir) {
+        @entries = sort { $a->{name} cmp $b->{name} } @entries;
+    }
 
     while (@entries) {
         my $entry = shift @entries;
         if (S_ISDIR($entry->{mode})) {
-            next if $entry->{name} =~ /^\.\.?$/;
-
             if (!defined $max_depth or $depth < $max_depth) {
                 if ($depth_first) {
                     $entry->{empty} = find("$name/".$entry->{name}, $depth + 1);
@@ -580,6 +601,8 @@ sub find {
                 if $delete;
             apply_chmod($entry, @chmod)
                 if @chmod;
+            rename_entry($entry)
+                if defined $rename;
             print_entry($entry)
                 if $print_mode != PRINT_NOT;
         }
@@ -590,6 +613,21 @@ sub find {
     }
 
     return 0;
+}
+
+sub rename_entry {
+    my $entry = shift;
+    local $_ = $entry->{name};
+    eval { eval $rename; };
+    if ($@) {
+        warn "$script: failed to rename: $@\n";
+        return;
+    }
+    if ($_ ne $entry->{name}) {
+        $sftp->rename($entry->{path}."/".$entry->{name}, $entry->{path}."/".$_)
+            or warn "$script: failed to rename ",$entry->{path}."/".$entry->{name},
+                    ": ",($sftp->error())[1],"\n";
+    }
 }
 
 sub delete_entry {
