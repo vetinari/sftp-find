@@ -191,6 +191,11 @@ Only descend DEPTH levels deep.
 Does a depth first search, i.e. directories are descended as soon as one is 
 found. Default is to process contents first, then descend.
 
+- \-sort
+
+Sorts the filenames in the current directory alphabetically before processing
+them.
+
 ## Action Options
 
 - \-delete
@@ -202,6 +207,12 @@ Deletes the matching entries
 Changes permissions on the files / directories. MODE can be an octal mode like
 `0755` or something like `ug+rw,o-rwx`. Multiple changes can be combined
 with a comma (`,`). See also [chmod(1)](http://man.he.net/man1/chmod) (changes with `X` are not supported).
+
+- \-rename CODE
+
+Renames the file, works similar to [rename(1)](http://man.he.net/man1/rename). CODE must be a valid perl code
+to transform the filename (only the file name will be given in `$_`, excluding
+the path).
 
 ## Output Options
 
