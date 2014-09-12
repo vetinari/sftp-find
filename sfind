@@ -65,7 +65,6 @@ if ($key_file) {
 $remote_user ||= $USER;
 $remote_port ||= scalar(getservbyname("ssh", "tcp")) || 22;
 
-my ($delete, $print_mode) = (0, PRINT_ENTRY);
 my $user_at_host = shift @ARGV
   or die usage();
 die "$script: missing colon after hostname?\n", usage()
@@ -90,6 +89,9 @@ my $ls_mode     = 0;
 my $max_depth   = undef;
 my $depth_first = 0;
 my $negate      = 0;
+my $delete      = 0;
+my @chmod       = ();
+my $print_mode  = PRINT_ENTRY;
 
 my %options = (
 
@@ -218,6 +220,10 @@ my %options = (
             },
             filter => sub {
                 my ($entry, $test, $args, $negate) = @_;
+                if (S_ISDIR($entry->{mode})) {
+                    my $empty = $entry->{empty} ? 1 : 0;
+                    return $negate ? !$empty : $empty;
+                }
                 return $negate ? $entry->{size} : !$entry->{size};
             },
         },
@@ -343,6 +349,16 @@ my %options = (
             option => sub {
                 $delete = 1;
                 $depth_first = 1;
+                unless ($print_mode == PRINT_REALLY) {
+                    $print_mode = PRINT_NOT;
+                }
+            },
+        },
+
+        '-chmod' => {
+            option => sub {
+                my $v = shift @ARGV;
+                @chmod = check_chmod_option($v);
                 unless ($print_mode == PRINT_REALLY) {
                     $print_mode = PRINT_NOT;
                 }
@@ -533,14 +549,23 @@ sub find {
         return;
     }
 
+    my @entries  = ();
     my @sub_dirs = ();
     while (my $entry = $dir->read()) {
+        push @entries, $entry;
+    }
+    undef $dir;
+
+    return 1 if @entries == 2;
+
+    while (@entries) {
+        my $entry = shift @entries;
         if (S_ISDIR($entry->{mode})) {
             next if $entry->{name} =~ /^\.\.?$/;
 
             if (!defined $max_depth or $depth < $max_depth) {
                 if ($depth_first) {
-                    find("$name/".$entry->{name}, $depth + 1);
+                    $entry->{empty} = find("$name/".$entry->{name}, $depth + 1);
                 }
                 else {
                     push @sub_dirs, "$name/".$entry->{name};
@@ -553,6 +578,8 @@ sub find {
         if (filter($entry)) {
             delete_entry($entry)
                 if $delete;
+            apply_chmod($entry, @chmod)
+                if @chmod;
             print_entry($entry)
                 if $print_mode != PRINT_NOT;
         }
@@ -561,14 +588,13 @@ sub find {
     foreach (@sub_dirs) {
         find($_, $depth + 1);
     }
+
+    return 0;
 }
 
 sub delete_entry {
-    my $entry = shift;
-    my $remove = 'unlink';
-    if (S_ISDIR($entry->{mode})) {
-        $remove = 'rmdir';
-    }
+    my $entry  = shift;
+    my $remove = S_ISDIR($entry->{mode}) ? 'rmdir' : 'unlink';
     $sftp->$remove($entry->{path}."/".$entry->{name})
         or warn "$script: failed to delete ",$entry->{path}."/".$entry->{name},
                 ": ",($sftp->error())[1],"\n";
@@ -689,6 +715,65 @@ sub get_ls_mode {
 sub ref_time_start {
     my ($val, $time) = @_;
     return $^T - ($^T % $time) - ($val * $time);
+}
+
+sub apply_chmod {
+    my $entry = shift;
+    my $mode  = $entry->{mode};
+    foreach my $c (@_) {
+        my ($s, $a, $d) = @$c;
+        $mode  =  $s if defined $s;
+        $mode |=  $a if defined $a;
+        $mode &= ~$d if defined $d;
+    }
+    $sftp->setstat($entry->{path}.'/'.$entry->{name}, mode => $mode)
+        or warn "$script: failed to chmod ",$entry->{path}."/".$entry->{name},
+                ": ",($sftp->error())[1],"\n";
+}
+
+sub check_chmod_option {
+    my @opts = split /,/, shift;
+    my @modes = ();
+    foreach my $o (@opts) {
+        if ($o =~ /^[0-7]{3,4}$/) {
+            push @modes, [oct($o), undef, undef]; # set, add, delete
+        }
+        elsif ($o =~ /^[ugoa]*([-+=][rwxst]*)+/) {
+            my @parts = split /([-+=])/, $o;
+            my $where = shift @parts;
+
+            my $mask  = 07777;
+            $mask = $mask & ~0700 unless $where =~ /[ua]/;
+            $mask = $mask & ~0070 unless $where =~ /[ga]/;
+            $mask = $mask & ~0007 unless $where =~ /[oa]/;
+
+            while (@parts) {
+                my $op  = shift @parts;
+                my $ch  = shift @parts;
+                my $mod = 0;
+                $mod |= 00444 if $ch =~ /r/;
+                $mod |= 00222 if $ch =~ /w/;
+                $mod |= 00111 if $ch =~ /x/;
+                $mod |= 04000 if $ch =~ /s/ and $where =~ /u/;
+                $mod |= 02000 if $ch =~ /s/ and $where =~ /g/;
+                $mod |= 01000 if $ch =~ /t/;
+
+                if ($op eq '=') {
+                    push @modes, [$mod & $mask, undef, undef];
+                }
+                elsif ($op eq '+') {
+                    push @modes, [undef, $mod & $mask, undef];
+                }
+                else {
+                    push @modes, [undef, undef, $mod & $mask];
+                }
+            }
+        }
+        else {
+            die "$0: invalid mode spec '$o'\n";
+        }
+    }
+    return @modes;
 }
 
 sub check_cmp_option {
