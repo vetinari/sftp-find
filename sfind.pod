@@ -278,8 +278,7 @@ L<ssh(1)>, L<sftp(1)>, L<find(1)>
 
 =head1 DOWNLOAD
 
-L<http://ankh-morp.org/code/sfind/sfind> or
-L<SVN|http://svn.ankh-morp.org:8080/tools/sfind/>
+L<https://github.com/vetinari/sftp-find>
 
 =head1 AUTHOR
 
@@ -287,7 +286,7 @@ Hanno Hecker E<lt>vetinari@ankh-morp.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2012 by Hanno Hecker; all rights reserved.
+Copyright (C) 2012-2014 by Hanno Hecker; all rights reserved.
 
 This script is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself, either Perl version 5.8.0 or, at
