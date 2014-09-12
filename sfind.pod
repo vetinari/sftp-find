@@ -219,6 +219,8 @@ found. Default is to process contents first, then descend.
 
 =head2 Action Options
 
+=over 4
+
 =item -delete
 
 Deletes the matching entries
