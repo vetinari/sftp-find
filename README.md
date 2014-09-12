@@ -142,7 +142,8 @@ Files' group id is equal to NUMBER
 
 - \-empty 
 
-Shortcut for `-size 0`, note that it does not match empty directories
+Shortcut for `-size 0`, note that it only matches empty directories when used
+with `-depth`.
 
 - \-mtime TIME
 
@@ -190,6 +191,18 @@ Only descend DEPTH levels deep.
 Does a depth first search, i.e. directories are descended as soon as one is 
 found. Default is to process contents first, then descend.
 
+## Action Options
+
+- \-delete
+
+Deletes the matching entries
+
+- \-chmod MODE\[,MODE\]
+
+Changes permissions on the files / directories. MODE can be an octal mode like
+`0755` or something like `ug+rw,o-rwx`. Multiple changes can be combined
+with a comma (`,`). See also [chmod(1)](http://man.he.net/man1/chmod) (changes with `X` are not supported).
+
 ## Output Options
 
 - \-print
@@ -224,8 +237,7 @@ A [ls(1)](http://man.he.net/man1/ls) like output, due to missing stat info not c
 
 # DOWNLOAD
 
-[http://ankh-morp.org/code/sfind/sfind](http://ankh-morp.org/code/sfind/sfind) or
-[SVN](http://svn.ankh-morp.org:8080/tools/sfind/)
+[https://github.com/vetinari/sftp-find](https://github.com/vetinari/sftp-find)
 
 # AUTHOR
 
@@ -233,7 +245,7 @@ Hanno Hecker <vetinari@ankh-morp.org>
 
 # COPYRIGHT AND LICENSE
 
-Copyright (C) 2012 by Hanno Hecker; all rights reserved.
+Copyright (C) 2012-2014 by Hanno Hecker; all rights reserved.
 
 This script is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself, either Perl version 5.8.0 or, at
