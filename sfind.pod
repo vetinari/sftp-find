@@ -223,6 +223,12 @@ found. Default is to process contents first, then descend.
 
 Deletes the matching entries
 
+=item -chmod MODE[,MODE]
+
+Changes permissions on the files / directories. MODE can be an octal mode like
+C<0755> or something like C<ug+rw,o-rwx>. Multiple changes can be combined
+with a comma (C<,>). See also L<chmod(1)> (changes with C<X> are not supported).
+
 =back
 
 =head2 Output Options
